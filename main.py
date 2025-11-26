@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-🎵 JioSaavn Ultimate Bot v2.0 - Fixed for Render
-All functions intact - Only deployment fixes
+🎵 JioSaavn Ultimate Bot v2.0 - Modern & Fast
+Fixed Version with Full Pagination & Working Features
+Render Deployment Ready
 """
 
 import os, sys, time, logging, asyncio, requests, re, random
@@ -15,10 +16,6 @@ from requests.adapters import HTTPAdapter
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
-
-# Flask for health check
-from flask import Flask, request as flask_request
-from threading import Thread
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -273,6 +270,7 @@ class KB:
             d = fmt_dur(s.get('duration','0'))
             kb.append([InlineKeyboardButton(f"🎵 {t} [{d}]", callback_data=f"c_{i}")])
         
+        # Pagination for collections
         nav = []
         if start > 0:
             nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"cp_{start-SONGS_PER_PAGE}"))
@@ -494,89 +492,11 @@ async def cmd_settings(u: Update, c):
     await u.message.reply_text("⚙️ *Settings*\n\nCustomize your experience:", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
 
 # === MESSAGE HANDLER ===
-async def on_error(u: Update, c):
-    logger.error(f"Error: {c.error}")
-
-async def post_init(app):
-    await app.bot.set_my_commands([
-        BotCommand("start", "🚀 Start the bot"),
-        BotCommand("menu", "🎵 Main menu"),
-        BotCommand("favorites", "💖 Your favorites"),
-        BotCommand("history", "📜 Listening history"),
-        BotCommand("stats", "📊 Your statistics"),
-        BotCommand("settings", "⚙️ Bot settings"),
-        BotCommand("help", "❓ Help guide"),
-    ])
-    logger.info("✅ Bot commands set!")
-
-# Flask app for health check
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def health_check():
-    return {'status': 'ok', 'bot': 'running'}, 200
-
-@flask_app.route('/health')
-def health():
-    return {'status': 'healthy'}, 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
-def main():
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("❌ BOT_TOKEN missing!")
-        return
-
-    # Get Render external URL
-    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-    if not RENDER_URL:
-        print("❌ RENDER_EXTERNAL_URL not set!")
-        return
-    
-    # Start Flask in background thread
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("✅ Flask health check server started")
-
-    # Build bot application
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-
-    # Add handlers
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("menu", cmd_menu))
-    app.add_handler(CommandHandler("favorites", cmd_fav))
-    app.add_handler(CommandHandler("history", cmd_hist))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_error_handler(on_error)
-
-    # Webhook setup
-    PORT = int(os.environ.get("PORT", 8080))
-    WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-    WEBHOOK_URL = f"{RENDER_URL}{WEBHOOK_PATH}"
-
-    logger.info(f"🚀 Starting webhook at: {WEBHOOK_URL}")
-    logger.info(f"🌐 Listening on port: {PORT}")
-
-    # Run webhook
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=WEBHOOK_PATH,
-        webhook_url=WEBHOOK_URL,
-        drop_pending_updates=True
-    )
-
-if __name__ == '__main__':
-    main()text(u: Update, c):
+async def on_text(u: Update, c):
     txt = u.message.text.strip()
     uid = u.effective_user.id
     
+    # Check if awaiting playlist name
     if db.user_stats[uid].get('awaiting_playlist', False):
         db.user_stats[uid]['awaiting_playlist'] = False
         if len(txt) > 50:
@@ -742,6 +662,7 @@ async def on_callback(u: Update, c):
             parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         return
     
+    # Menu items
     if d == "m_search":
         await q.edit_message_text("🔍 *Search Mode*\n\nSend me a song name or JioSaavn link\\!", parse_mode=ParseMode.MARKDOWN_V2)
     
@@ -792,13 +713,18 @@ async def on_callback(u: Update, c):
         await q.edit_message_text("💡 *Quick Help*\n\n• Send song name to search\n• Paste JioSaavn URL\n• Tap song to download", 
             parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Mood searches
     elif d.startswith("mood_"):
         mood = d[5:]
         mood_queries = {
-            'happy': 'happy songs', 'sad': 'sad songs',
-            'workout': 'workout songs', 'sleep': 'sleep music',
-            'party': 'party songs', 'romance': 'romantic songs',
-            'chill': 'chill songs', 'energy': 'energetic songs'
+            'happy': 'happy songs', 
+            'sad': 'sad songs',
+            'workout': 'workout songs', 
+            'sleep': 'sleep music',
+            'party': 'party songs', 
+            'romance': 'romantic songs',
+            'chill': 'chill songs', 
+            'energy': 'energetic songs'
         }
         query = mood_queries.get(mood, 'top songs')
         await q.edit_message_text(f"🎭 *Loading {mood.title()} vibes\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
@@ -810,12 +736,18 @@ async def on_callback(u: Update, c):
         else:
             await q.edit_message_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Artist searches
     elif d.startswith("art_"):
         artist = d[4:]
         artist_names = {
-            'arijit': 'Arijit Singh', 'shreya': 'Shreya Ghoshal', 'atif': 'Atif Aslam',
-            'neha': 'Neha Kakkar', 'apdhillon': 'AP Dhillon', 'jubin': 'Jubin Nautiyal',
-            'kk': 'KK', 'sonu': 'Sonu Nigam'
+            'arijit': 'Arijit Singh', 
+            'shreya': 'Shreya Ghoshal', 
+            'atif': 'Atif Aslam',
+            'neha': 'Neha Kakkar', 
+            'apdhillon': 'AP Dhillon', 
+            'jubin': 'Jubin Nautiyal',
+            'kk': 'KK', 
+            'sonu': 'Sonu Nigam'
         }
         if artist == 'search':
             await q.edit_message_text("🎤 *Artist Search*\n\nSend artist name:", parse_mode=ParseMode.MARKDOWN_V2)
@@ -830,6 +762,7 @@ async def on_callback(u: Update, c):
         else:
             await q.edit_message_text("❌ *No songs found\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Quality settings
     elif d == "set_quality":
         await q.edit_message_text("📶 *Select Quality*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.quality())
     
@@ -839,6 +772,7 @@ async def on_callback(u: Update, c):
         await q.answer(f"✅ Quality set to {quality}", show_alert=True)
         await q.edit_message_text("⚙️ *Settings*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
     
+    # Song select
     elif d.startswith("s_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -855,6 +789,7 @@ async def on_callback(u: Update, c):
         db.add_to_history(uid, song)
         await send_song_detail(q.message, c, uid, song, idx, pg)
     
+    # Collection song
     elif d.startswith("c_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -864,6 +799,7 @@ async def on_callback(u: Update, c):
         db.add_to_history(uid, song)
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
+    # Collection pagination
     elif d.startswith("cp_"):
         start = int(d[3:])
         if uid not in db.user_searches: return
@@ -871,12 +807,14 @@ async def on_callback(u: Update, c):
         col_type = db.user_searches[uid].get('type', 'album')
         await q.edit_message_reply_markup(reply_markup=kb.collection(songs, start, col_type))
     
+    # Pagination
     elif d.startswith("p_"):
         start = int(d[2:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         await q.edit_message_reply_markup(reply_markup=kb.songs(songs, start, len(songs)))
     
+    # Shuffle
     elif d == "shuffle":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs'].copy()
@@ -885,6 +823,7 @@ async def on_callback(u: Update, c):
         await q.edit_message_reply_markup(reply_markup=kb.songs(songs, 0, len(songs)))
         await q.answer("🔀 Shuffled!", show_alert=False)
     
+    # Back
     elif d.startswith("b_"):
         pg = int(d[2:])
         if uid not in db.user_searches:
@@ -897,6 +836,7 @@ async def on_callback(u: Update, c):
         await c.bot.send_message(q.message.chat.id, f"🎵 *{esc(str(qry)[:30])}*\n📊 {len(songs)} songs",
             parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, pg, len(songs)))
     
+    # Download
     elif d.startswith("d_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -913,7 +853,7 @@ async def on_callback(u: Update, c):
 
 🎵 Fetching your music\\.\\.\\.
 
-⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷
+⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷
 █░░░░░░░░░░░░░░░░░░░░░░█
 █░░▓▓▓▓▓▓▓░░░░░░░░░░░░░█  
 █░░░░░░░░░░░░░░░░░░░░░░█
@@ -998,9 +938,14 @@ _Uploading\\.\\.\\._
             caption = f"🎵 *{esc(title)}*\n👤 {esc(singers)}\n\n_Downloaded via @Grooviabot_"
             
             await c.bot.send_audio(
-                chat_id=q.message.chat.id, audio=audio, thumbnail=thumb,
-                title=title, performer=singers, duration=dur, 
-                filename=f"{safe_title}.mp3", caption=caption, 
+                chat_id=q.message.chat.id, 
+                audio=audio, 
+                thumbnail=thumb,
+                title=title, 
+                performer=singers, 
+                duration=dur, 
+                filename=f"{safe_title}.mp3",
+                caption=caption, 
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             
@@ -1012,12 +957,14 @@ _Uploading\\.\\.\\._
             logger.error(f"Download error: {e}")
             await msg.edit_text("❌ *Error occurred\\!*\n\nPlease try again", parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Download all
     elif d == "dall":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
-        max_dl = min(len(songs), 10)
-        
+        max_dl = len(songs)
+
         await q.answer(f"⬇️ Downloading {max_dl} songs...")
+        
         msg = await q.message.reply_text(f"📥 *Batch Download*\n\n⏳ Downloading 0/{max_dl}\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
         
         done = 0
@@ -1045,6 +992,7 @@ _Uploading\\.\\.\\._
                         done += 1
                         db.user_stats[uid]['downloads'] += 1
                         db.global_downloads += 1
+                        
                         await msg.edit_text(f"📥 *Batch Download*\n\n⏳ Downloaded {done}/{max_dl}\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
                 
                 await asyncio.sleep(1.5)
@@ -1053,17 +1001,20 @@ _Uploading\\.\\.\\._
         
         await msg.edit_text(f"✅ *Download Complete\\!*\n\n📊 {done}/{max_dl} songs downloaded", parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Save all to favorites
     elif d == "savall":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         added = 0
         for song in songs:
-            if db.add_to_favorites(uid, song): added += 1
+            if db.add_to_favorites(uid, song): 
+                added += 1
         if added > 0:
             await q.answer(f"💖 Added {added} songs to favorites!", show_alert=True)
         else:
             await q.answer("All songs already in favorites!", show_alert=True)
     
+    # Lyrics
     elif d.startswith("l_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -1089,6 +1040,7 @@ _Uploading\\.\\.\\._
         if len(txt) > 4000: txt = txt[:4000] + "\\.\\.\\."
         await q.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Share
     elif d.startswith("sh_"):
         idx = int(d[3:])
         if uid not in db.user_searches: return
@@ -1103,6 +1055,7 @@ _Uploading\\.\\.\\._
         share_text = f"🎵 Check out this song!\n\n*{title}*\nby {singers}\n\n{purl}"
         await q.message.reply_text(share_text, parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Fav/Unfav
     elif d.startswith("f_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -1128,6 +1081,7 @@ _Uploading\\.\\.\\._
             try: await q.edit_message_reply_markup(reply_markup=kb.detail(idx, False, pg))
             except: pass
     
+    # Fav play
     elif d.startswith("fp_"):
         idx = int(d[3:])
         favs = db.user_favorites[uid]
@@ -1136,6 +1090,7 @@ _Uploading\\.\\.\\._
         db.user_searches[uid] = {'q': 'Favorites', 'songs': favs}
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
+    # History play
     elif d.startswith("hp_"):
         idx = int(d[3:])
         hist = db.user_history[uid]
@@ -1144,20 +1099,24 @@ _Uploading\\.\\.\\._
         db.user_searches[uid] = {'q': 'History', 'songs': hist}
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
+    # Clear favorites
     elif d == "cfav":
         db.user_favorites[uid] = []
         await q.answer("🗑️ Favorites cleared!", show_alert=True)
         await q.edit_message_text("💔 *Favorites cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Clear history
     elif d == "chist":
         db.user_history[uid] = []
         await q.answer("🗑️ History cleared!", show_alert=True)
         await q.edit_message_text("📜 *History cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Create new playlist
     elif d == "newpl":
         await q.edit_message_text("📁 *Create Playlist*\n\nSend playlist name:", parse_mode=ParseMode.MARKDOWN_V2)
         db.user_stats[uid]['awaiting_playlist'] = True
     
+    # Add to playlist
     elif d.startswith("addpl_"):
         idx = int(d[6:])
         if uid not in db.user_searches: return
@@ -1177,6 +1136,7 @@ _Uploading\\.\\.\\._
         await q.edit_message_text("📁 *Select Playlist*\n\nChoose where to add:", 
             parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(kb_pl))
     
+    # Playlist selection
     elif d.startswith("plsel_"):
         parts = d[6:].split('_', 1)
         idx = int(parts[0])
@@ -1196,6 +1156,7 @@ _Uploading\\.\\.\\._
         fav = any((s.get('songid') or s.get('id', '')) == sid for s in db.user_favorites[uid])
         await q.edit_message_reply_markup(reply_markup=kb.detail(idx, fav, pg))
     
+    # View playlist
     elif d.startswith("pl_"):
         pl_name = d[3:]
         if pl_name not in db.user_playlists[uid]:
@@ -1212,4 +1173,69 @@ _Uploading\\.\\.\\._
         await q.edit_message_text(f"📁 *{esc(pl_name)}*\n📊 {len(songs)} songs", 
             parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(songs, 0, 'playlist'))
 
-async def on_
+async def on_error(u: Update, c):
+    logger.error(f"Error: {c.error}")
+
+async def post_init(app):
+    await app.bot.set_my_commands([
+        BotCommand("start", "🚀 Start the bot"),
+        BotCommand("menu", "🎵 Main menu"),
+        BotCommand("favorites", "💖 Your favorites"),
+        BotCommand("history", "📜 Listening history"),
+        BotCommand("stats", "📊 Your statistics"),
+        BotCommand("settings", "⚙️ Bot settings"),
+        BotCommand("help", "❓ Help guide"),
+    ])
+    
+    # Set webhook
+    webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', '')}/{BOT_TOKEN}"
+    try:
+        await app.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        logger.info(f"✅ Webhook set successfully: {webhook_url}")
+    except Exception as e:
+        logger.error(f"❌ Failed to set webhook: {e}")
+
+def main():
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("❌ BOT_TOKEN missing!")
+        return
+
+    # Get port and webhook URL
+    PORT = int(os.environ.get("PORT", 8080))
+    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
+    
+    if not RENDER_URL:
+        logger.error("❌ RENDER_EXTERNAL_URL not found!")
+        return
+    
+    WEBHOOK_URL = f"{RENDER_URL}/{BOT_TOKEN}"
+    
+    logger.info(f"🚀 Starting bot on port {PORT}")
+    logger.info(f"🔗 Webhook URL: {WEBHOOK_URL}")
+
+    # Build application
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    # Add handlers
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("favorites", cmd_fav))
+    app.add_handler(CommandHandler("history", cmd_hist))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_error_handler(on_error)
+
+    # Run webhook
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=WEBHOOK_URL,
+        allowed_updates=Update.ALL_TYPES
+    )
+
+if __name__ == '__main__':
+    main()
