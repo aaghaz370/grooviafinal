@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-🎵 JioSaavn Ultimate Bot v2.0 - Modern & Fast
-Fixed Version with Full Pagination & Working Features
-Render Deployment Ready
+🎵 JioSaavn Ultimate Bot v2.0 - Render Ready (Polling Mode)
+Fixed version with proper Flask keep-alive
 """
 
 import os, sys, time, logging, asyncio, requests, re, random, threading
@@ -290,7 +289,6 @@ class KB:
             d = fmt_dur(s.get('duration','0'))
             kb.append([InlineKeyboardButton(f"🎵 {t} [{d}]", callback_data=f"c_{i}")])
         
-        # Pagination for collections
         nav = []
         if start > 0:
             nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"cp_{start-SONGS_PER_PAGE}"))
@@ -424,177 +422,6 @@ Hey *{name}*\\! Welcome\\! 🎉
 💡 *Quick Start:*
 Just send me a song name or
 paste a JioSaavn link\\!
-
-━━━━━━━━━━━━━━━━━━━━━
-"""
-    await u.message.reply_text(welcome, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
-
-async def cmd_help(u: Update, c):
-    help_text = """
-📚 *Help Guide*
-
-*🔍 Search Songs:*
-Send any song name to search
-
-*🔗 Direct Links:*
-Paste JioSaavn URL for:
-• Songs • Albums • Playlists
-
-*📋 Commands:*
-/start \\- Start bot
-/menu \\- Main menu
-/favorites \\- Your saved songs
-/history \\- Recently played
-/stats \\- Your statistics
-/settings \\- Bot settings
-
-*💡 Tips:*
-• Add songs to favorites
-• Create custom playlists
-• Explore by mood or artist
-
-━━━━━━━━━━━━━━━━━━━━━
-"""
-    await u.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
-
-async def cmd_menu(u: Update, c):
-    await u.message.reply_text(
-        "╔═══════════════════╗\n   🎵 *Main Menu*\n╚═══════════════════╝",
-        parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main()
-    )
-
-async def cmd_fav(u: Update, c):
-    uid = u.effective_user.id
-    favs = db.user_favorites[uid]
-    if not favs:
-        await u.message.reply_text("💔 *No favorites yet\\!*\n\nSearch songs and tap 💖 to save", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
-        return
-    await u.message.reply_text(f"💖 *Your Favorites*\n📊 {len(favs)} songs saved", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.favs(favs))
-
-async def cmd_hist(u: Update, c):
-    uid = u.effective_user.id
-    hist = db.user_history[uid]
-    if not hist:
-        await u.message.reply_text("📜 *No history yet\\!*\n\nStart exploring music\\!", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
-        return
-    await u.message.reply_text(f"📜 *Your History*\n📊 {len(hist)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.hist(hist))
-
-async def cmd_stats(u: Update, c):
-    uid = u.effective_user.id
-    st = db.user_stats[uid]
-    favs = len(db.user_favorites[uid])
-    hist = len(db.user_history[uid])
-    pls = len(db.user_playlists[uid])
-    
-    stats_text = f"""
-╔══════════════════════════╗
-       📊 *Your Statistics*       
-╚══════════════════════════╝
-
-🔍 *Searches:* {st['searches']}
-⬇️ *Downloads:* {st['downloads']}
-💖 *Favorites:* {favs}
-📜 *History:* {hist}
-📁 *Playlists:* {pls}
-
-📅 *First seen:* {st['first_seen'][:10]}
-⏰ *Last active:* {st['last_active'][:10]}
-
-━━━━━━━━━━━━━━━━━━━━━
-🌍 *Global Stats*
-📥 Total Downloads: {db.global_downloads}
-🔍 Total Searches: {db.global_searches}
-"""
-    await u.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
-
-async def cmd_settings(u: Update, c):
-    uid = u.effective_user.id
-    await u.message.reply_text("⚙️ *Settings*\n\nCustomize your experience:", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
-
-# === MESSAGE HANDLER ===
-async def on_text(u: Update, c):
-    txt = u.message.text.strip()
-    uid = u.effective_user.id
-    
-    # Check if awaiting playlist name
-    if db.user_stats[uid].get('awaiting_playlist', False):
-        db.user_stats[uid]['awaiting_playlist'] = False
-        if len(txt) > 50:
-            await u.message.reply_text("❌ *Playlist name too long\\!*\n\nMax 50 characters", parse_mode=ParseMode.MARKDOWN_V2)
-            return
-        if db.create_playlist(uid, txt):
-            await u.message.reply_text(f"✅ *Playlist created\\!*\n\n📁 {esc(txt)}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
-        else:
-            await u.message.reply_text("❌ *Playlist already exists\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
-        return
-    
-    if len(txt) < 2:
-        await u.message.reply_text("❌ Query too short\\!", parse_mode=ParseMode.MARKDOWN_V2)
-        return
-    
-    if is_url(txt):
-        await handle_url(u, c, txt, uid)
-    else:
-        await handle_search(u, c, txt, uid)
-
-async def handle_search(u, c, q, uid):
-    db.user_stats[uid]['searches'] += 1
-    db.global_searches += 1
-    
-    loading_msg = random.choice(SEARCH_MSGS)
-    msg = await u.message.reply_text(f"{loading_msg}", parse_mode=ParseMode.MARKDOWN_V2)
-    
-    songs = api.search(q)
-    if not songs:
-        await msg.edit_text(
-            "😕 *No results found\\!*\n\n💡 Try different keywords",
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main()
-        )
-        return
-    
-    db.user_searches[uid] = {'q': q, 'songs': songs}
-    
-    result_text = f"""
-╔══════════════════════════╗
-    🔍 *Search Results*
-╚══════════════════════════╝
-
-🎵 *Query:* `{esc(q)}`
-📊 *Found:* {len(songs)} songs
-
-━━━━━━━━━━━━━━━━━━━━━
-"""
-    await msg.edit_text(result_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
-
-async def handle_url(u, c, url, uid):
-    msg = await u.message.reply_text("🔗 *Processing link\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
-    
-    t = url_type(url)
-    
-    if t == 'song':
-        song = api.song(url)
-        if song:
-            db.user_searches[uid] = {'q': url, 'songs': [song]}
-            db.add_to_history(uid, song)
-            await send_song_detail(msg, c, uid, song, 0, 0)
-        else:
-            await msg.edit_text("❌ *Could not fetch song\\!*\n\nTry again later", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
-    
-    elif t == 'album':
-        album = api.album(url)
-        if album and album.get('songs'):
-            db.user_searches[uid] = {'q': url, 'songs': album['songs'], 'col': album, 'type': 'album'}
-            name = album.get('title') or album.get('name', 'Album')
-            year = album.get('year', '')
-            
-            album_text = f"""
-╔══════════════════════════╗
-       💿 *Album*
-╚══════════════════════════╝
-
-📀 *{esc(name)}*
-📅 Year: {year}
-🎵 {len(album['songs'])} songs
 
 ━━━━━━━━━━━━━━━━━━━━━
 """
@@ -737,14 +564,10 @@ async def on_callback(u: Update, c):
     elif d.startswith("mood_"):
         mood = d[5:]
         mood_queries = {
-            'happy': 'happy songs', 
-            'sad': 'sad songs',
-            'workout': 'workout songs', 
-            'sleep': 'sleep music',
-            'party': 'party songs', 
-            'romance': 'romantic songs',
-            'chill': 'chill songs', 
-            'energy': 'energetic songs'
+            'happy': 'happy songs', 'sad': 'sad songs',
+            'workout': 'workout songs', 'sleep': 'sleep music',
+            'party': 'party songs', 'romance': 'romantic songs',
+            'chill': 'chill songs', 'energy': 'energetic songs'
         }
         query = mood_queries.get(mood, 'top songs')
         await q.edit_message_text(f"🎭 *Loading {mood.title()} vibes\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
@@ -760,14 +583,9 @@ async def on_callback(u: Update, c):
     elif d.startswith("art_"):
         artist = d[4:]
         artist_names = {
-            'arijit': 'Arijit Singh', 
-            'shreya': 'Shreya Ghoshal', 
-            'atif': 'Atif Aslam',
-            'neha': 'Neha Kakkar', 
-            'apdhillon': 'AP Dhillon', 
-            'jubin': 'Jubin Nautiyal',
-            'kk': 'KK', 
-            'sonu': 'Sonu Nigam'
+            'arijit': 'Arijit Singh', 'shreya': 'Shreya Ghoshal', 'atif': 'Atif Aslam',
+            'neha': 'Neha Kakkar', 'apdhillon': 'AP Dhillon', 'jubin': 'Jubin Nautiyal',
+            'kk': 'KK', 'sonu': 'Sonu Nigam'
         }
         if artist == 'search':
             await q.edit_message_text("🎤 *Artist Search*\n\nSend artist name:", parse_mode=ParseMode.MARKDOWN_V2)
@@ -825,7 +643,95 @@ async def on_callback(u: Update, c):
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         col_type = db.user_searches[uid].get('type', 'album')
-        await q.edit_message_reply_markup(reply_markup=kb.collection(songs, start, col_type))
+        await q.edit_message_reply_markup(reply_markup=kb.detail(idx, fav, pg))
+    
+    elif d.startswith("pl_"):
+        pl_name = d[3:]
+        if pl_name not in db.user_playlists[uid]:
+            await q.answer("Playlist not found!", show_alert=True)
+            return
+        
+        songs = db.user_playlists[uid][pl_name]
+        if not songs:
+            await q.edit_message_text(f"📁 *{esc(pl_name)}*\n\n📋 Empty", 
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
+            return
+        
+        db.user_searches[uid] = {'q': f'Playlist: {pl_name}', 'songs': songs, 'type': 'playlist'}
+        await q.edit_message_text(f"📁 *{esc(pl_name)}*\n📊 {len(songs)} songs",
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(songs, 0, 'playlist'))
+
+async def on_error(u: Update, c):
+    logger.error(f"Error: {c.error}")
+
+async def post_init(app):
+    """Set bot commands - NO WEBHOOK setup here"""
+    await app.bot.set_my_commands([
+        BotCommand("start", "🚀 Start the bot"),
+        BotCommand("menu", "🎵 Main menu"),
+        BotCommand("favorites", "💖 Your favorites"),
+        BotCommand("history", "📜 Listening history"),
+        BotCommand("stats", "📊 Your statistics"),
+        BotCommand("settings", "⚙️ Bot settings"),
+        BotCommand("help", "❓ Help guide"),
+    ])
+    logger.info("✅ Bot commands set successfully")
+
+def main():
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("❌ BOT_TOKEN missing!")
+        return
+
+    # CRITICAL: Force delete webhook before starting polling
+    logger.info("🔄 Force deleting webhook to ensure polling works...")
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook",
+            json={"drop_pending_updates": True},
+            timeout=10
+        )
+        logger.info("✅ Webhook deleted successfully")
+        time.sleep(2)  # Give Telegram time to process
+    except Exception as e:
+        logger.error(f"⚠️ Failed to delete webhook: {e}")
+
+    PORT = int(os.environ.get("PORT", 8080))
+    logger.info(f"🚀 Starting bot in POLLING mode on port {PORT}")
+
+    # Build application
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    # Add handlers
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("favorites", cmd_fav))
+    app.add_handler(CommandHandler("history", cmd_hist))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_error_handler(on_error)
+
+    # Start Flask in background thread for keep-alive
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("✅ Flask keep-alive server started")
+
+    logger.info("🎵 Bot running in POLLING mode (perfect for Render free tier)")
+    logger.info(f"📡 Health check URL: http://0.0.0.0:{PORT}/")
+    logger.info("💡 Add this URL to UptimeRobot to prevent sleep")
+
+    # Run bot in polling mode (NO webhook)
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        poll_interval=1.0,
+        timeout=30
+    )
+
+if __name__ == '__main__':
+    main()markup(reply_markup=kb.collection(songs, start, col_type))
     
     # Pagination
     elif d.startswith("p_"):
@@ -958,14 +864,9 @@ _Uploading\\.\\.\\._
             caption = f"🎵 *{esc(title)}*\n👤 {esc(singers)}\n\n_Downloaded via @Grooviabot_"
             
             await c.bot.send_audio(
-                chat_id=q.message.chat.id, 
-                audio=audio, 
-                thumbnail=thumb,
-                title=title, 
-                performer=singers, 
-                duration=dur, 
-                filename=f"{safe_title}.mp3",
-                caption=caption, 
+                chat_id=q.message.chat.id, audio=audio, thumbnail=thumb,
+                title=title, performer=singers, duration=dur, 
+                filename=f"{safe_title}.mp3", caption=caption, 
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             
@@ -981,10 +882,9 @@ _Uploading\\.\\.\\._
     elif d == "dall":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
-        max_dl = len(songs)
-
-        await q.answer(f"⬇️ Downloading {max_dl} songs...")
+        max_dl = min(len(songs), 10)
         
+        await q.answer(f"⬇️ Downloading {max_dl} songs...")
         msg = await q.message.reply_text(f"📥 *Batch Download*\n\n⏳ Downloading 0/{max_dl}\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
         
         done = 0
@@ -1012,7 +912,6 @@ _Uploading\\.\\.\\._
                         done += 1
                         db.user_stats[uid]['downloads'] += 1
                         db.global_downloads += 1
-                        
                         await msg.edit_text(f"📥 *Batch Download*\n\n⏳ Downloaded {done}/{max_dl}\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
                 
                 await asyncio.sleep(1.5)
@@ -1021,18 +920,17 @@ _Uploading\\.\\.\\._
         
         await msg.edit_text(f"✅ *Download Complete\\!*\n\n📊 {done}/{max_dl} songs downloaded", parse_mode=ParseMode.MARKDOWN_V2)
     
-    # Save all to favorites
+    # Save all
     elif d == "savall":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         added = 0
         for song in songs:
-            if db.add_to_favorites(uid, song): 
-                added += 1
+            if db.add_to_favorites(uid, song): added += 1
         if added > 0:
-            await q.answer(f"💖 Added {added} songs to favorites!", show_alert=True)
+            await q.answer(f"💖 Added {added} songs!", show_alert=True)
         else:
-            await q.answer("All songs already in favorites!", show_alert=True)
+            await q.answer("All already in favorites!", show_alert=True)
     
     # Lyrics
     elif d.startswith("l_"):
@@ -1082,7 +980,7 @@ _Uploading\\.\\.\\._
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
         if db.add_to_favorites(uid, songs[idx]):
-            await q.answer("💖 Added to favorites!", show_alert=True)
+            await q.answer("💖 Added!", show_alert=True)
             pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
             try: await q.edit_message_reply_markup(reply_markup=kb.detail(idx, True, pg))
             except: pass
@@ -1096,12 +994,12 @@ _Uploading\\.\\.\\._
         if idx >= len(songs): return
         sid = songs[idx].get('songid') or songs[idx].get('id', '')
         if db.remove_from_favorites(uid, sid):
-            await q.answer("💔 Removed from favorites!", show_alert=True)
+            await q.answer("💔 Removed!", show_alert=True)
             pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
             try: await q.edit_message_reply_markup(reply_markup=kb.detail(idx, False, pg))
             except: pass
     
-    # Fav play
+    # Fav/Hist play
     elif d.startswith("fp_"):
         idx = int(d[3:])
         favs = db.user_favorites[uid]
@@ -1110,7 +1008,6 @@ _Uploading\\.\\.\\._
         db.user_searches[uid] = {'q': 'Favorites', 'songs': favs}
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
-    # History play
     elif d.startswith("hp_"):
         idx = int(d[3:])
         hist = db.user_history[uid]
@@ -1119,24 +1016,22 @@ _Uploading\\.\\.\\._
         db.user_searches[uid] = {'q': 'History', 'songs': hist}
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
-    # Clear favorites
+    # Clear
     elif d == "cfav":
         db.user_favorites[uid] = []
-        await q.answer("🗑️ Favorites cleared!", show_alert=True)
+        await q.answer("🗑️ Cleared!", show_alert=True)
         await q.edit_message_text("💔 *Favorites cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
-    # Clear history
     elif d == "chist":
         db.user_history[uid] = []
-        await q.answer("🗑️ History cleared!", show_alert=True)
+        await q.answer("🗑️ Cleared!", show_alert=True)
         await q.edit_message_text("📜 *History cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
-    # Create new playlist
+    # Playlists
     elif d == "newpl":
-        await q.edit_message_text("📁 *Create Playlist*\n\nSend playlist name:", parse_mode=ParseMode.MARKDOWN_V2)
+        await q.edit_message_text("📁 *Create Playlist*\n\nSend name:", parse_mode=ParseMode.MARKDOWN_V2)
         db.user_stats[uid]['awaiting_playlist'] = True
     
-    # Add to playlist
     elif d.startswith("addpl_"):
         idx = int(d[6:])
         if uid not in db.user_searches: return
@@ -1145,7 +1040,7 @@ _Uploading\\.\\.\\._
         
         pls = db.user_playlists[uid]
         if not pls:
-            await q.answer("📁 Create a playlist first!", show_alert=True)
+            await q.answer("📁 Create playlist first!", show_alert=True)
             return
         
         kb_pl = []
@@ -1153,10 +1048,8 @@ _Uploading\\.\\.\\._
             kb_pl.append([InlineKeyboardButton(f"📁 {name}", callback_data=f"plsel_{idx}_{name}")])
         kb_pl.append([InlineKeyboardButton("🔙 Back", callback_data=f"s_{idx}")])
         
-        await q.edit_message_text("📁 *Select Playlist*\n\nChoose where to add:", 
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(kb_pl))
+        await q.edit_message_text("📁 *Select Playlist*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(kb_pl))
     
-    # Playlist selection
     elif d.startswith("plsel_"):
         parts = d[6:].split('_', 1)
         idx = int(parts[0])
@@ -1174,106 +1067,174 @@ _Uploading\\.\\.\\._
         pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
         sid = songs[idx].get('songid') or songs[idx].get('id', '')
         fav = any((s.get('songid') or s.get('id', '')) == sid for s in db.user_favorites[uid])
-        await q.edit_message_reply_markup(reply_markup=kb.detail(idx, fav, pg))
-    
-    # View playlist
-    elif d.startswith("pl_"):
-        pl_name = d[3:]
-        if pl_name not in db.user_playlists[uid]:
-            await q.answer("Playlist not found!", show_alert=True)
-            return
-        
-        songs = db.user_playlists[uid][pl_name]
-        if not songs:
-            await q.edit_message_text(f"📁 *{esc(pl_name)}*\n\n📋 Empty playlist", 
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
-            return
-        
-        db.user_searches[uid] = {'q': f'Playlist: {pl_name}', 'songs': songs, 'type': 'playlist'}
-        await q.edit_message_text(f"📁 *{esc(pl_name)}*\n📊 {len(songs)} songs",
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(songs, 0, 'playlist'))
+        await q.edit_message_reply_
+"""
+    await u.message.reply_text(welcome, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
 
-                
-    logger.error(f"Error: {c.error}")
+async def cmd_help(u: Update, c):
+    help_text = """
+📚 *Help Guide*
 
-async def on_error(u: Update, c):
-    logger.error(f"Error: {c.error}")
+*🔍 Search Songs:*
+Send any song name to search
 
-async def post_init(app):
-    await app.bot.set_my_commands([
-        BotCommand("start", "🚀 Start the bot"),
-        BotCommand("menu", "🎵 Main menu"),
-        BotCommand("favorites", "💖 Your favorites"),
-        BotCommand("history", "📜 Listening history"),
-        BotCommand("stats", "📊 Your statistics"),
-        BotCommand("settings", "⚙️ Bot settings"),
-        BotCommand("help", "❓ Help guide"),
-    ])
-    
-    # Set webhook logic (skipped for polling, but kept for structure)
-    if os.environ.get('RENDER_EXTERNAL_URL'):
-        webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', '')}/{BOT_TOKEN}"
-        try:
-            await app.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-            logger.info(f"✅ Webhook set successfully: {webhook_url}")
-        except Exception as e:
-            logger.error(f"❌ Failed to set webhook: {e}")
-    else:
-        logger.info("ℹ️ Skipping webhook setup (Polling mode)")
-        # We already deleted webhook in main(), but safe to do again
-        try:
-            await app.bot.delete_webhook(drop_pending_updates=True)
-        except:
-            pass
+*🔗 Direct Links:*
+Paste JioSaavn URL for:
+• Songs • Albums • Playlists
 
-def main():
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("❌ BOT_TOKEN missing!")
+*📋 Commands:*
+/start \\- Start bot
+/menu \\- Main menu
+/favorites \\- Your saved songs
+/history \\- Recently played
+/stats \\- Your statistics
+/settings \\- Bot settings
+
+*💡 Tips:*
+• Add songs to favorites
+• Create custom playlists
+• Explore by mood or artist
+
+━━━━━━━━━━━━━━━━━━━━━
+"""
+    await u.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+
+async def cmd_menu(u: Update, c):
+    await u.message.reply_text(
+        "╔═══════════════════╗\n   🎵 *Main Menu*\n╚═══════════════════╝",
+        parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main()
+    )
+
+async def cmd_fav(u: Update, c):
+    uid = u.effective_user.id
+    favs = db.user_favorites[uid]
+    if not favs:
+        await u.message.reply_text("💔 *No favorites yet\\!*\n\nSearch songs and tap 💖 to save", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         return
+    await u.message.reply_text(f"💖 *Your Favorites*\n📊 {len(favs)} songs saved", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.favs(favs))
 
-    # Force delete webhook to prevent 409 Conflict errors
-    try:
-        logger.info("🔄 Force deleting webhook to ensure polling works...")
-        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True")
-        logger.info("✅ Webhook deleted successfully")
-    except Exception as e:
-        logger.error(f"⚠️ Failed to delete webhook: {e}")
+async def cmd_hist(u: Update, c):
+    uid = u.effective_user.id
+    hist = db.user_history[uid]
+    if not hist:
+        await u.message.reply_text("📜 *No history yet\\!*\n\nStart exploring music\\!", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        return
+    await u.message.reply_text(f"📜 *Your History*\n📊 {len(hist)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.hist(hist))
 
-    # Get port and webhook URL
-    PORT = int(os.environ.get("PORT", 8000))
-    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
+async def cmd_stats(u: Update, c):
+    uid = u.effective_user.id
+    st = db.user_stats[uid]
+    favs = len(db.user_favorites[uid])
+    hist = len(db.user_history[uid])
+    pls = len(db.user_playlists[uid])
     
-    logger.info(f"🚀 Starting bot on port {PORT}")
+    stats_text = f"""
+╔══════════════════════════╗
+       📊 *Your Statistics*       
+╚══════════════════════════╝
 
-    # Build application
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+🔍 *Searches:* {st['searches']}
+⬇️ *Downloads:* {st['downloads']}
+💖 *Favorites:* {favs}
+📜 *History:* {hist}
+📁 *Playlists:* {pls}
 
-    # Add handlers
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("menu", cmd_menu))
-    app.add_handler(CommandHandler("favorites", cmd_fav))
-    app.add_handler(CommandHandler("history", cmd_hist))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_error_handler(on_error)
+📅 *First seen:* {st['first_seen'][:10]}
+⏰ *Last active:* {st['last_active'][:10]}
 
-    # Start Flask in a separate thread
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    logger.info("✅ Flask keep-alive server started")
+━━━━━━━━━━━━━━━━━━━━━
+🌍 *Global Stats*
+📥 Total Downloads: {db.global_downloads}
+🔍 Total Searches: {db.global_searches}
+"""
+    await u.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
 
-    if RENDER_URL:
-        logger.info(f"🔗 Render URL detected: {RENDER_URL}")
-        logger.info("ℹ️ Running in POLLING mode with Flask keep-alive (Recommended for Render Free Tier)")
+async def cmd_settings(u: Update, c):
+    uid = u.effective_user.id
+    await u.message.reply_text("⚙️ *Settings*\n\nCustomize your experience:", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
+
+# === MESSAGE HANDLER ===
+async def on_text(u: Update, c):
+    txt = u.message.text.strip()
+    uid = u.effective_user.id
+    
+    if db.user_stats[uid].get('awaiting_playlist', False):
+        db.user_stats[uid]['awaiting_playlist'] = False
+        if len(txt) > 50:
+            await u.message.reply_text("❌ *Playlist name too long\\!*\n\nMax 50 characters", parse_mode=ParseMode.MARKDOWN_V2)
+            return
+        if db.create_playlist(uid, txt):
+            await u.message.reply_text(f"✅ *Playlist created\\!*\n\n📁 {esc(txt)}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
+        else:
+            await u.message.reply_text("❌ *Playlist already exists\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
+        return
+    
+    if len(txt) < 2:
+        await u.message.reply_text("❌ Query too short\\!", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+    
+    if is_url(txt):
+        await handle_url(u, c, txt, uid)
     else:
-        logger.info("ℹ️ Running in Local POLLING mode")
+        await handle_search(u, c, txt, uid)
 
-    # Run bot in polling mode
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+async def handle_search(u, c, q, uid):
+    db.user_stats[uid]['searches'] += 1
+    db.global_searches += 1
+    
+    loading_msg = random.choice(SEARCH_MSGS)
+    msg = await u.message.reply_text(f"{loading_msg}", parse_mode=ParseMode.MARKDOWN_V2)
+    
+    songs = api.search(q)
+    if not songs:
+        await msg.edit_text(
+            "😕 *No results found\\!*\n\n💡 Try different keywords",
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main()
+        )
+        return
+    
+    db.user_searches[uid] = {'q': q, 'songs': songs}
+    
+    result_text = f"""
+╔══════════════════════════╗
+    🔍 *Search Results*
+╚══════════════════════════╝
 
-if __name__ == '__main__':
-    main()
+🎵 *Query:* `{esc(q)}`
+📊 *Found:* {len(songs)} songs
+
+━━━━━━━━━━━━━━━━━━━━━
+"""
+    await msg.edit_text(result_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
+
+async def handle_url(u, c, url, uid):
+    msg = await u.message.reply_text("🔗 *Processing link\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+    
+    t = url_type(url)
+    
+    if t == 'song':
+        song = api.song(url)
+        if song:
+            db.user_searches[uid] = {'q': url, 'songs': [song]}
+            db.add_to_history(uid, song)
+            await send_song_detail(msg, c, uid, song, 0, 0)
+        else:
+            await msg.edit_text("❌ *Could not fetch song\\!*\n\nTry again later", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+    
+    elif t == 'album':
+        album = api.album(url)
+        if album and album.get('songs'):
+            db.user_searches[uid] = {'q': url, 'songs': album['songs'], 'col': album, 'type': 'album'}
+            name = album.get('title') or album.get('name', 'Album')
+            year = album.get('year', '')
+            
+            album_text = f"""
+╔══════════════════════════╗
+       💿 *Album*
+╚══════════════════════════╝
+
+📀 *{esc(name)}*
+📅 Year: {year}
+🎵 {len(album['songs'])} songs
+
+━━━━━━━━━━━━━━━━━━━━━
