@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-🎵 JioSaavn Ultimate Bot v2.0 - Complete Working Version
-Render Ready - POLLING MODE ONLY - NO WEBHOOK
+🎵 JioSaavn Ultimate Bot v2.0 - Modern & Fast
+Fixed Version with Full Pagination & Working Features
+Render Deployment Ready
 """
 
 import os, sys, time, logging, asyncio, requests, re, random, threading
@@ -10,7 +11,7 @@ from flask import Flask
 
 load_dotenv()
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from io import BytesIO
 from collections import defaultdict
 from urllib3.util.retry import Retry
@@ -23,11 +24,12 @@ from telegram.constants import ParseMode
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Flask App for Render Keep-Alive
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is running! 🚀", 200
+    return "Bot is running! 🚀\nUse this URL in UptimeRobot to keep the bot alive.", 200
 
 @app.route('/health')
 def health():
@@ -39,10 +41,13 @@ def run_flask():
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8334511601:AAGpaDzTXbZrGKSlWWNBbg7q3Iq1-xfJ_yU")
 API_BASE_URL = "https://jiosaavanapi.onrender.com"
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7097905601").split(",") if x.strip().isdigit()]
 SONGS_PER_PAGE = 10
 MAX_RETRIES = 5
+
 REQUEST_TIMEOUT = 300
 
+# Session with retry logic
 def create_session():
     session = requests.Session()
     retry = Retry(total=MAX_RETRIES, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504, 429])
@@ -66,7 +71,9 @@ class DataStore:
             'first_seen': datetime.now().isoformat(), 'last_active': datetime.now().isoformat(),
             'awaiting_playlist': False
         })
-        self.user_settings: Dict[int, Dict] = defaultdict(lambda: {'quality': '160kbps'})
+        self.user_settings: Dict[int, Dict] = defaultdict(lambda: {
+            'quality': '160kbps', 'language': 'hindi', 'notifications': True
+        })
     
     def add_to_history(self, uid, song):
         sid = song.get('songid') or song.get('id', '')
@@ -118,16 +125,18 @@ def esc(t):
 def trunc(t, m=30): return (t[:m]+"…") if t and len(t)>m else (t or "Unknown")
 
 def is_url(t): return any(x in t.lower() for x in ['jiosaavn.com/', 'saavn.com/'])
-
 def url_type(u):
     if '/song/' in u: return 'song'
     if '/album/' in u: return 'album'
     if '/playlist/' in u: return 'playlist'
+    if '/artist/' in u: return 'artist'
     return None
 
 def get_quality_url(song, quality='160kbps'):
+    """Get appropriate quality download URL"""
     media_url = song.get('media_url') or song.get('url', '')
-    if not media_url: return None
+    if not media_url:
+        return None
     quality_map = {'96kbps': '96', '160kbps': '160', '320kbps': '320'}
     q = quality_map.get(quality, '160')
     for old_q in ['320', '160', '96']:
@@ -153,7 +162,13 @@ class API:
                 elif r.status_code == 429:
                     time.sleep(2 ** attempt)
                     continue
-            except:
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout attempt {attempt+1}/{retries}")
+                if attempt < retries - 1:
+                    time.sleep(1)
+                    continue
+            except Exception as e:
+                logger.error(f"Request error: {e}")
                 if attempt < retries - 1:
                     time.sleep(1)
                     continue
@@ -189,33 +204,44 @@ class API:
     def download(url, retries=MAX_RETRIES):
         for attempt in range(retries):
             try:
-                r = SESSION.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=REQUEST_TIMEOUT, stream=True)
+                r = SESSION.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, 
+                               timeout=REQUEST_TIMEOUT, stream=True)
                 if r.status_code == 200:
                     buf = BytesIO()
                     for c in r.iter_content(16384):
                         buf.write(c)
                     buf.seek(0)
                     return buf.read()
-            except:
+            except Exception as e:
+                logger.error(f"Download attempt {attempt+1}: {e}")
                 if attempt < retries - 1:
                     time.sleep(1)
         return None
 
 api = API()
 
+# Loading messages
+LOADING_MSGS = ["⏳ Loading your music…", "🎵 Fetching the beats…", "🔄 Almost there…", "🎧 Preparing your track…", "✨ Magic happening…"]
+SEARCH_MSGS = ["🔍 Searching the universe…", "🎵 Finding your vibe…", "🔎 Hunting for tracks…"]
+
 class KB:
     @staticmethod
     def main():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔍 Search", callback_data="m_search"), InlineKeyboardButton("🔥 Trending", callback_data="m_trend")],
-            [InlineKeyboardButton("💖 Favorites", callback_data="m_fav"), InlineKeyboardButton("📜 History", callback_data="m_hist")],
-            [InlineKeyboardButton("🎭 Moods", callback_data="m_mood"), InlineKeyboardButton("🎤 Artists", callback_data="m_artist")],
-            [InlineKeyboardButton("📊 Stats", callback_data="m_stats"), InlineKeyboardButton("⚙️ Settings", callback_data="m_settings")],
-            [InlineKeyboardButton("📋 Playlists", callback_data="m_playlist"), InlineKeyboardButton("❓ Help", callback_data="m_help")]
+            [InlineKeyboardButton("🔍 Search Songs", callback_data="m_search"),
+             InlineKeyboardButton("🔥 Trending", callback_data="m_trend")],
+            [InlineKeyboardButton("💖 Favorites", callback_data="m_fav"),
+             InlineKeyboardButton("📜 History", callback_data="m_hist")],
+            [InlineKeyboardButton("🎭 By Mood", callback_data="m_mood"),
+             InlineKeyboardButton("🎤 Artists", callback_data="m_artist")],
+            [InlineKeyboardButton("📊 My Stats", callback_data="m_stats"),
+             InlineKeyboardButton("⚙️ Settings", callback_data="m_settings")],
+            [InlineKeyboardButton("📋 Playlists", callback_data="m_playlist"),
+             InlineKeyboardButton("❓ Help", callback_data="m_help")]
         ])
     
     @staticmethod
-    def songs(songs, start, total):
+    def songs(songs, start, total, source='search'):
         kb = []
         end = min(start + SONGS_PER_PAGE, len(songs))
         for i in range(start, end):
@@ -224,13 +250,19 @@ class KB:
             a = trunc(s.get('singers','?'), 12)
             d = fmt_dur(s.get('duration','0'))
             kb.append([InlineKeyboardButton(f"🎵 {t} • {a} [{d}]", callback_data=f"s_{i}")])
+        
         nav = []
         if start > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"p_{start-SONGS_PER_PAGE}"))
-        pg = (start//SONGS_PER_PAGE)+1; tot = (total+SONGS_PER_PAGE-1)//SONGS_PER_PAGE
+        pg = (start//SONGS_PER_PAGE)+1
+        tot = (total+SONGS_PER_PAGE-1)//SONGS_PER_PAGE
         nav.append(InlineKeyboardButton(f"📄 {pg}/{tot}", callback_data="x"))
         if end < total: nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"p_{end}"))
         if nav: kb.append(nav)
-        kb.append([InlineKeyboardButton("⬇️ Download All", callback_data="dall"), InlineKeyboardButton("🔀 Shuffle", callback_data="shuffle")])
+        
+        kb.append([
+            InlineKeyboardButton("⬇️ Download All", callback_data="dall"),
+            InlineKeyboardButton("🔀 Shuffle", callback_data="shuffle")
+        ])
         kb.append([InlineKeyboardButton("🏠 Home", callback_data="menu"), InlineKeyboardButton("❌ Close", callback_data="close")])
         return InlineKeyboardMarkup(kb)
     
@@ -239,14 +271,17 @@ class KB:
         f = "💔 Remove" if fav else "💖 Favorite"
         fc = f"uf_{idx}" if fav else f"f_{idx}"
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬇️ Download", callback_data=f"d_{idx}")],
-            [InlineKeyboardButton("📝 Lyrics", callback_data=f"l_{idx}"), InlineKeyboardButton("📤 Share", callback_data=f"sh_{idx}")],
-            [InlineKeyboardButton(f, callback_data=fc), InlineKeyboardButton("➕ Playlist", callback_data=f"addpl_{idx}")],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"b_{pg}"), InlineKeyboardButton("🏠 Home", callback_data="menu")]
+            [InlineKeyboardButton("⬇️ Download Now", callback_data=f"d_{idx}")],
+            [InlineKeyboardButton("📝 Lyrics", callback_data=f"l_{idx}"),
+             InlineKeyboardButton("📤 Share", callback_data=f"sh_{idx}")],
+            [InlineKeyboardButton(f, callback_data=fc),
+             InlineKeyboardButton("➕ Playlist", callback_data=f"addpl_{idx}")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"b_{pg}"),
+             InlineKeyboardButton("🏠 Home", callback_data="menu")]
         ])
     
     @staticmethod
-    def collection(songs, start=0):
+    def collection(songs, start=0, col_type='album'):
         kb = []
         end = min(start + SONGS_PER_PAGE, len(songs))
         for i in range(start, end):
@@ -254,14 +289,24 @@ class KB:
             t = trunc(s.get('title') or s.get('song','?'), 28)
             d = fmt_dur(s.get('duration','0'))
             kb.append([InlineKeyboardButton(f"🎵 {t} [{d}]", callback_data=f"c_{i}")])
+        
+        # Pagination for collections
         nav = []
-        if start > 0: nav.append(InlineKeyboardButton("◀️", callback_data=f"cp_{start-SONGS_PER_PAGE}"))
-        pg = (start//SONGS_PER_PAGE)+1; tot = (len(songs)+SONGS_PER_PAGE-1)//SONGS_PER_PAGE
-        nav.append(InlineKeyboardButton(f"{pg}/{tot}", callback_data="x"))
-        if end < len(songs): nav.append(InlineKeyboardButton("▶️", callback_data=f"cp_{end}"))
-        if nav: kb.append(nav)
-        kb.append([InlineKeyboardButton("⬇️ All", callback_data="dall"), InlineKeyboardButton("💖 Save", callback_data="savall")])
-        kb.append([InlineKeyboardButton("🏠 Home", callback_data="menu")])
+        if start > 0:
+            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"cp_{start-SONGS_PER_PAGE}"))
+        pg = (start//SONGS_PER_PAGE)+1
+        tot = (len(songs)+SONGS_PER_PAGE-1)//SONGS_PER_PAGE
+        nav.append(InlineKeyboardButton(f"📄 {pg}/{tot}", callback_data="x"))
+        if end < len(songs):
+            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"cp_{end}"))
+        if nav:
+            kb.append(nav)
+        
+        kb.append([
+            InlineKeyboardButton("⬇️ Download All", callback_data="dall"),
+            InlineKeyboardButton("💖 Save All", callback_data="savall")
+        ])
+        kb.append([InlineKeyboardButton("🏠 Home", callback_data="menu"), InlineKeyboardButton("❌ Close", callback_data="close")])
         return InlineKeyboardMarkup(kb)
     
     @staticmethod
@@ -270,8 +315,13 @@ class KB:
         for i, s in enumerate(favs[:10]):
             t = trunc(s.get('title') or s.get('song','?'), 28)
             kb.append([InlineKeyboardButton(f"💖 {t}", callback_data=f"fp_{i}")])
-        if len(favs) > 10: kb.append([InlineKeyboardButton(f"📋 +{len(favs)-10} more", callback_data="morefav")])
-        if favs: kb.append([InlineKeyboardButton("🔀 Shuffle", callback_data="shfav"), InlineKeyboardButton("🗑️ Clear", callback_data="cfav")])
+        if len(favs) > 10:
+            kb.append([InlineKeyboardButton(f"📋 +{len(favs)-10} more songs", callback_data="morefav")])
+        if favs:
+            kb.append([
+                InlineKeyboardButton("🔀 Shuffle Play", callback_data="shfav"),
+                InlineKeyboardButton("🗑️ Clear All", callback_data="cfav")
+            ])
         kb.append([InlineKeyboardButton("🏠 Home", callback_data="menu")])
         return InlineKeyboardMarkup(kb)
     
@@ -281,45 +331,63 @@ class KB:
         for i, s in enumerate(hist[:10]):
             t = trunc(s.get('title') or s.get('song','?'), 28)
             kb.append([InlineKeyboardButton(f"📜 {t}", callback_data=f"hp_{i}")])
-        if len(hist) > 10: kb.append([InlineKeyboardButton(f"📋 +{len(hist)-10} more", callback_data="morehist")])
-        if hist: kb.append([InlineKeyboardButton("🔁 Replay", callback_data="replay"), InlineKeyboardButton("🗑️ Clear", callback_data="chist")])
+        if len(hist) > 10:
+            kb.append([InlineKeyboardButton(f"📋 +{len(hist)-10} more songs", callback_data="morehist")])
+        if hist: 
+            kb.append([
+                InlineKeyboardButton("🔁 Replay Recent", callback_data="replay"),
+                InlineKeyboardButton("🗑️ Clear", callback_data="chist")
+            ])
         kb.append([InlineKeyboardButton("🏠 Home", callback_data="menu")])
         return InlineKeyboardMarkup(kb)
     
     @staticmethod
     def moods():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("😊 Happy", callback_data="mood_happy"), InlineKeyboardButton("😢 Sad", callback_data="mood_sad")],
-            [InlineKeyboardButton("💪 Workout", callback_data="mood_workout"), InlineKeyboardButton("😴 Sleep", callback_data="mood_sleep")],
-            [InlineKeyboardButton("🎉 Party", callback_data="mood_party"), InlineKeyboardButton("💕 Romance", callback_data="mood_romance")],
-            [InlineKeyboardButton("🧘 Chill", callback_data="mood_chill"), InlineKeyboardButton("🔥 Energy", callback_data="mood_energy")],
+            [InlineKeyboardButton("😊 Happy", callback_data="mood_happy"),
+             InlineKeyboardButton("😢 Sad", callback_data="mood_sad")],
+            [InlineKeyboardButton("💪 Workout", callback_data="mood_workout"),
+             InlineKeyboardButton("😴 Sleep", callback_data="mood_sleep")],
+            [InlineKeyboardButton("🎉 Party", callback_data="mood_party"),
+             InlineKeyboardButton("💕 Romance", callback_data="mood_romance")],
+            [InlineKeyboardButton("🧘 Chill", callback_data="mood_chill"),
+             InlineKeyboardButton("🔥 Energy", callback_data="mood_energy")],
             [InlineKeyboardButton("🏠 Home", callback_data="menu")]
         ])
     
     @staticmethod
     def artists():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("Arijit", callback_data="art_arijit"), InlineKeyboardButton("Shreya", callback_data="art_shreya")],
-            [InlineKeyboardButton("Atif", callback_data="art_atif"), InlineKeyboardButton("Neha", callback_data="art_neha")],
-            [InlineKeyboardButton("AP Dhillon", callback_data="art_apdhillon"), InlineKeyboardButton("Jubin", callback_data="art_jubin")],
-            [InlineKeyboardButton("KK", callback_data="art_kk"), InlineKeyboardButton("Sonu Nigam", callback_data="art_sonu")],
+            [InlineKeyboardButton("Arijit Singh", callback_data="art_arijit"),
+             InlineKeyboardButton("Shreya Ghoshal", callback_data="art_shreya")],
+            [InlineKeyboardButton("Atif Aslam", callback_data="art_atif"),
+             InlineKeyboardButton("Neha Kakkar", callback_data="art_neha")],
+            [InlineKeyboardButton("AP Dhillon", callback_data="art_apdhillon"),
+             InlineKeyboardButton("Jubin Nautiyal", callback_data="art_jubin")],
+            [InlineKeyboardButton("KK", callback_data="art_kk"),
+             InlineKeyboardButton("Sonu Nigam", callback_data="art_sonu")],
+            [InlineKeyboardButton("🔍 Search Artist", callback_data="art_search")],
             [InlineKeyboardButton("🏠 Home", callback_data="menu")]
         ])
     
     @staticmethod
     def settings(uid):
-        q = db.user_settings[uid].get('quality', '160kbps')
+        s = db.user_settings[uid]
+        q = s.get('quality', '160kbps')
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(f"📶 Quality: {q}", callback_data="set_quality")],
+            [InlineKeyboardButton("🇮🇳 Hindi", callback_data="lang_hindi"),
+             InlineKeyboardButton("🇬🇧 English", callback_data="lang_english")],
+            [InlineKeyboardButton("🔔 Notifications", callback_data="set_notif")],
             [InlineKeyboardButton("🏠 Home", callback_data="menu")]
         ])
     
     @staticmethod
     def quality():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📶 96kbps", callback_data="q_96")],
-            [InlineKeyboardButton("📶 160kbps ✓", callback_data="q_160")],
-            [InlineKeyboardButton("📶 320kbps", callback_data="q_320")],
+            [InlineKeyboardButton("📶 96kbps (Fast)", callback_data="q_96")],
+            [InlineKeyboardButton("📶 160kbps (Balanced) ✓", callback_data="q_160")],
+            [InlineKeyboardButton("📶 320kbps (Best)", callback_data="q_320")],
             [InlineKeyboardButton("🔙 Back", callback_data="m_settings")]
         ])
     
@@ -329,14 +397,17 @@ class KB:
         kb = []
         for name, songs in list(pls.items())[:8]:
             kb.append([InlineKeyboardButton(f"📁 {name} ({len(songs)})", callback_data=f"pl_{name}")])
-        kb.append([InlineKeyboardButton("➕ New", callback_data="newpl")])
+        kb.append([InlineKeyboardButton("➕ Create New", callback_data="newpl")])
         kb.append([InlineKeyboardButton("🏠 Home", callback_data="menu")])
         return InlineKeyboardMarkup(kb)
 
 kb = KB()
 
+# === COMMANDS ===
 async def cmd_start(u: Update, c):
-    name = esc(u.effective_user.first_name)
+    user = u.effective_user
+    name = esc(user.first_name)
+    
     welcome = f"""
 ╔══════════════════════════╗
    🎵 *Groovia Bot*    
@@ -347,12 +418,12 @@ Hey *{name}*\\! Welcome\\! 🎉
 🎧 *What I can do:*
 • Search millions of songs
 • Download in high quality
-• Create playlists
-• Track history
+• Create your playlists
+• Track your listening history
 
 💡 *Quick Start:*
-Send me a song name or
-JioSaavn link\\!
+Just send me a song name or
+paste a JioSaavn link\\!
 
 ━━━━━━━━━━━━━━━━━━━━━
 """
@@ -362,84 +433,103 @@ async def cmd_help(u: Update, c):
     help_text = """
 📚 *Help Guide*
 
-*🔍 Search:*
-Send any song name
+*🔍 Search Songs:*
+Send any song name to search
 
-*🔗 Links:*
-Paste JioSaavn URL
+*🔗 Direct Links:*
+Paste JioSaavn URL for:
+• Songs • Albums • Playlists
 
 *📋 Commands:*
-/start /menu /favorites /history /stats /settings
+/start \\- Start bot
+/menu \\- Main menu
+/favorites \\- Your saved songs
+/history \\- Recently played
+/stats \\- Your statistics
+/settings \\- Bot settings
 
 *💡 Tips:*
-• Save to favorites
-• Create playlists
-• Browse by mood
+• Add songs to favorites
+• Create custom playlists
+• Explore by mood or artist
 
 ━━━━━━━━━━━━━━━━━━━━━
 """
     await u.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
 
 async def cmd_menu(u: Update, c):
-    await u.message.reply_text("╔═══════════════════╗\n   🎵 *Main Menu*\n╚═══════════════════╝", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+    await u.message.reply_text(
+        "╔═══════════════════╗\n   🎵 *Main Menu*\n╚═══════════════════╝",
+        parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main()
+    )
 
 async def cmd_fav(u: Update, c):
     uid = u.effective_user.id
     favs = db.user_favorites[uid]
     if not favs:
-        await u.message.reply_text("💔 *No favorites yet\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await u.message.reply_text("💔 *No favorites yet\\!*\n\nSearch songs and tap 💖 to save", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         return
-    await u.message.reply_text(f"💖 *Favorites*\n📊 {len(favs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.favs(favs))
+    await u.message.reply_text(f"💖 *Your Favorites*\n📊 {len(favs)} songs saved", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.favs(favs))
 
 async def cmd_hist(u: Update, c):
     uid = u.effective_user.id
     hist = db.user_history[uid]
     if not hist:
-        await u.message.reply_text("📜 *No history yet\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await u.message.reply_text("📜 *No history yet\\!*\n\nStart exploring music\\!", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         return
-    await u.message.reply_text(f"📜 *History*\n📊 {len(hist)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.hist(hist))
+    await u.message.reply_text(f"📜 *Your History*\n📊 {len(hist)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.hist(hist))
 
 async def cmd_stats(u: Update, c):
     uid = u.effective_user.id
     st = db.user_stats[uid]
+    favs = len(db.user_favorites[uid])
+    hist = len(db.user_history[uid])
+    pls = len(db.user_playlists[uid])
+    
     stats_text = f"""
 ╔══════════════════════════╗
-       📊 *Your Stats*       
+       📊 *Your Statistics*       
 ╚══════════════════════════╝
 
-🔍 Searches: {st['searches']}
-⬇️ Downloads: {st['downloads']}
-💖 Favorites: {len(db.user_favorites[uid])}
-📜 History: {len(db.user_history[uid])}
-📁 Playlists: {len(db.user_playlists[uid])}
+🔍 *Searches:* {st['searches']}
+⬇️ *Downloads:* {st['downloads']}
+💖 *Favorites:* {favs}
+📜 *History:* {hist}
+📁 *Playlists:* {pls}
+
+📅 *First seen:* {st['first_seen'][:10]}
+⏰ *Last active:* {st['last_active'][:10]}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🌍 *Global*
-📥 Downloads: {db.global_downloads}
-🔍 Searches: {db.global_searches}
+🌍 *Global Stats*
+📥 Total Downloads: {db.global_downloads}
+🔍 Total Searches: {db.global_searches}
 """
     await u.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
 
 async def cmd_settings(u: Update, c):
-    await u.message.reply_text("⚙️ *Settings*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(u.effective_user.id))
+    uid = u.effective_user.id
+    await u.message.reply_text("⚙️ *Settings*\n\nCustomize your experience:", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
 
+# === MESSAGE HANDLER ===
 async def on_text(u: Update, c):
     txt = u.message.text.strip()
     uid = u.effective_user.id
     
+    # Check if awaiting playlist name
     if db.user_stats[uid].get('awaiting_playlist', False):
         db.user_stats[uid]['awaiting_playlist'] = False
         if len(txt) > 50:
-            await u.message.reply_text("❌ *Too long\\!*", parse_mode=ParseMode.MARKDOWN_V2)
+            await u.message.reply_text("❌ *Playlist name too long\\!*\n\nMax 50 characters", parse_mode=ParseMode.MARKDOWN_V2)
             return
         if db.create_playlist(uid, txt):
-            await u.message.reply_text(f"✅ *Created\\!*\n\n📁 {esc(txt)}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
+            await u.message.reply_text(f"✅ *Playlist created\\!*\n\n📁 {esc(txt)}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
         else:
-            await u.message.reply_text("❌ *Already exists\\!*", parse_mode=ParseMode.MARKDOWN_V2)
+            await u.message.reply_text("❌ *Playlist already exists\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
         return
     
     if len(txt) < 2:
-        await u.message.reply_text("❌ Too short\\!", parse_mode=ParseMode.MARKDOWN_V2)
+        await u.message.reply_text("❌ Query too short\\!", parse_mode=ParseMode.MARKDOWN_V2)
         return
     
     if is_url(txt):
@@ -450,26 +540,35 @@ async def on_text(u: Update, c):
 async def handle_search(u, c, q, uid):
     db.user_stats[uid]['searches'] += 1
     db.global_searches += 1
-    msg = await u.message.reply_text("🔍 *Searching\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+    
+    loading_msg = random.choice(SEARCH_MSGS)
+    msg = await u.message.reply_text(f"{loading_msg}", parse_mode=ParseMode.MARKDOWN_V2)
+    
     songs = api.search(q)
     if not songs:
-        await msg.edit_text("😕 *No results\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await msg.edit_text(
+            "😕 *No results found\\!*\n\n💡 Try different keywords",
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main()
+        )
         return
+    
     db.user_searches[uid] = {'q': q, 'songs': songs}
+    
     result_text = f"""
 ╔══════════════════════════╗
     🔍 *Search Results*
 ╚══════════════════════════╝
 
-🎵 Query: `{esc(q)}`
-📊 Found: {len(songs)} songs
+🎵 *Query:* `{esc(q)}`
+📊 *Found:* {len(songs)} songs
 
 ━━━━━━━━━━━━━━━━━━━━━
 """
     await msg.edit_text(result_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
 
 async def handle_url(u, c, url, uid):
-    msg = await u.message.reply_text("🔗 *Processing\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+    msg = await u.message.reply_text("🔗 *Processing link\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+    
     t = url_type(url)
     
     if t == 'song':
@@ -479,27 +578,51 @@ async def handle_url(u, c, url, uid):
             db.add_to_history(uid, song)
             await send_song_detail(msg, c, uid, song, 0, 0)
         else:
-            await msg.edit_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await msg.edit_text("❌ *Could not fetch song\\!*\n\nTry again later", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
     elif t == 'album':
         album = api.album(url)
         if album and album.get('songs'):
-            db.user_searches[uid] = {'q': url, 'songs': album['songs'], 'type': 'album'}
-            name = album.get('title') or 'Album'
-            await msg.edit_text(f"💿 *{esc(name)}*\n🎵 {len(album['songs'])} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(album['songs']))
+            db.user_searches[uid] = {'q': url, 'songs': album['songs'], 'col': album, 'type': 'album'}
+            name = album.get('title') or album.get('name', 'Album')
+            year = album.get('year', '')
+            
+            album_text = f"""
+╔══════════════════════════╗
+       💿 *Album*
+╚══════════════════════════╝
+
+📀 *{esc(name)}*
+📅 Year: {year}
+🎵 {len(album['songs'])} songs
+
+━━━━━━━━━━━━━━━━━━━━━
+"""
+            await msg.edit_text(album_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(album['songs'], 0, 'album'))
         else:
-            await msg.edit_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await msg.edit_text("❌ *Could not fetch album\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
     elif t == 'playlist':
         pl = api.playlist(url)
         if pl and pl.get('songs'):
-            db.user_searches[uid] = {'q': url, 'songs': pl['songs'], 'type': 'playlist'}
-            name = pl.get('listname') or 'Playlist'
-            await msg.edit_text(f"📋 *{esc(name)}*\n🎵 {len(pl['songs'])} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(pl['songs']))
+            db.user_searches[uid] = {'q': url, 'songs': pl['songs'], 'col': pl, 'type': 'playlist'}
+            name = pl.get('listname') or pl.get('title', 'Playlist')
+            
+            pl_text = f"""
+╔══════════════════════════╗
+       📋 *Playlist*
+╚══════════════════════════╝
+
+📝 *{esc(name)}*
+🎵 {len(pl['songs'])} songs
+
+━━━━━━━━━━━━━━━━━━━━━
+"""
+            await msg.edit_text(pl_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(pl['songs'], 0, 'playlist'))
         else:
-            await msg.edit_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await msg.edit_text("❌ *Could not fetch playlist\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     else:
-        await msg.edit_text("❌ *Invalid URL\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await msg.edit_text("❌ *Invalid URL\\!*\n\nSupported: song/album/playlist", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
 
 async def send_song_detail(msg, c, uid, song, idx, pg):
     title = song.get('title') or song.get('song', 'Unknown')
@@ -508,6 +631,7 @@ async def send_song_detail(msg, c, uid, song, idx, pg):
     dur = fmt_dur(song.get('duration', '0'))
     year = song.get('year', 'N/A')
     lang = str(song.get('language', 'N/A')).title()
+    
     sid = song.get('songid') or song.get('id', '')
     fav = any((s.get('songid') or s.get('id', '')) == sid for s in db.user_favorites[uid])
     
@@ -518,25 +642,30 @@ async def send_song_detail(msg, c, uid, song, idx, pg):
 
 🎶 *{esc(title)}*
 
-👤 {esc(singers)}
-💿 {esc(album)}
-⏱ {dur}
-📅 {year}
-🌐 {lang}
+👤 *Artist:* {esc(singers)}
+💿 *Album:* {esc(album)}
+⏱ *Duration:* {dur}
+📅 *Year:* {year}
+🌐 *Language:* {lang}
 
 ━━━━━━━━━━━━━━━━━━━━━
 """
     img = song.get('image') or song.get('image_url', '')
+    
     try: await msg.delete()
     except: pass
     
     if img:
         try:
-            await c.bot.send_photo(chat_id=msg.chat.id, photo=img, caption=info, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.detail(idx, fav, pg))
+            await c.bot.send_photo(chat_id=msg.chat.id, photo=img, caption=info,
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.detail(idx, fav, pg))
             return
         except: pass
-    await c.bot.send_message(chat_id=msg.chat.id, text=info, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.detail(idx, fav, pg))
+    
+    await c.bot.send_message(chat_id=msg.chat.id, text=info,
+        parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.detail(idx, fav, pg))
 
+# === CALLBACKS ===
 async def on_callback(u: Update, c):
     q = u.callback_query
     await q.answer()
@@ -549,76 +678,121 @@ async def on_callback(u: Update, c):
         return
     if d == "x": return
     if d == "menu":
-        await q.edit_message_text("╔═══════════════════╗\n   🎵 *Main Menu*\n╚═══════════════════╝", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await q.edit_message_text("╔═══════════════════╗\n   🎵 *Main Menu*\n╚═══════════════════╝", 
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         return
     
+    # Menu items
     if d == "m_search":
-        await q.edit_message_text("🔍 *Search Mode*\n\nSend song name or link\\!", parse_mode=ParseMode.MARKDOWN_V2)
+        await q.edit_message_text("🔍 *Search Mode*\n\nSend me a song name or JioSaavn link\\!", parse_mode=ParseMode.MARKDOWN_V2)
+    
     elif d == "m_trend":
-        await q.edit_message_text("🔥 *Loading\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+        await q.edit_message_text("🔥 *Loading Trending\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
         songs = api.search("top songs 2024")
         if songs:
             db.user_searches[uid] = {'q': 'Trending', 'songs': songs}
-            await q.edit_message_text(f"🔥 *Trending*\n📊 {len(songs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
+            await q.edit_message_text(f"🔥 *Trending Now*\n📊 {len(songs)} hot tracks", 
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
         else:
-            await q.edit_message_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await q.edit_message_text("❌ *Failed to load\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+    
     elif d == "m_fav":
         favs = db.user_favorites[uid]
         if not favs:
-            await q.edit_message_text("💔 *No favorites\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await q.edit_message_text("💔 *No favorites yet\\!*\n\nSearch songs and tap 💖", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         else:
-            await q.edit_message_text(f"💖 *Favorites*\n📊 {len(favs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.favs(favs))
+            await q.edit_message_text(f"💖 *Your Favorites*\n📊 {len(favs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.favs(favs))
+    
     elif d == "m_hist":
         hist = db.user_history[uid]
         if not hist:
-            await q.edit_message_text("📜 *No history\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await q.edit_message_text("📜 *No history yet\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
         else:
-            await q.edit_message_text(f"📜 *History*\n📊 {len(hist)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.hist(hist))
+            await q.edit_message_text(f"📜 *Your History*\n📊 {len(hist)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.hist(hist))
+    
     elif d == "m_mood":
-        await q.edit_message_text("🎭 *Browse by Mood*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.moods())
+        await q.edit_message_text("🎭 *Browse by Mood*\n\nSelect your vibe:", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.moods())
+    
     elif d == "m_artist":
-        await q.edit_message_text("🎤 *Popular Artists*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.artists())
+        await q.edit_message_text("🎤 *Popular Artists*\n\nSelect an artist:", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.artists())
+    
     elif d == "m_stats":
         st = db.user_stats[uid]
-        await q.edit_message_text(f"📊 *Stats*\n\n🔍 {st['searches']}\n⬇️ {st['downloads']}\n💖 {len(db.user_favorites[uid])}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        favs = len(db.user_favorites[uid])
+        await q.edit_message_text(
+            f"📊 *Your Stats*\n\n🔍 Searches: {st['searches']}\n⬇️ Downloads: {st['downloads']}\n💖 Favorites: {favs}\n📜 History: {len(db.user_history[uid])}",
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+    
     elif d == "m_settings":
         await q.edit_message_text("⚙️ *Settings*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
-    elif d == "m_playlist":
-        await q.edit_message_text("📋 *Playlists*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
-    elif d == "m_help":
-        await q.edit_message_text("💡 *Help*\n\n• Send song name\n• Paste URL\n• Tap to download", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    elif d == "m_playlist":
+        await q.edit_message_text("📋 *Your Playlists*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
+    
+    elif d == "m_help":
+        await q.edit_message_text("💡 *Quick Help*\n\n• Send song name to search\n• Paste JioSaavn URL\n• Tap song to download", 
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+    
+    # Mood searches
     elif d.startswith("mood_"):
         mood = d[5:]
-        queries = {'happy': 'happy songs', 'sad': 'sad songs', 'workout': 'workout songs', 'sleep': 'sleep music', 'party': 'party songs', 'romance': 'romantic songs', 'chill': 'chill songs', 'energy': 'energetic songs'}
-        await q.edit_message_text(f"🎭 *Loading\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
-        songs = api.search(queries.get(mood, 'top songs'))
+        mood_queries = {
+            'happy': 'happy songs', 
+            'sad': 'sad songs',
+            'workout': 'workout songs', 
+            'sleep': 'sleep music',
+            'party': 'party songs', 
+            'romance': 'romantic songs',
+            'chill': 'chill songs', 
+            'energy': 'energetic songs'
+        }
+        query = mood_queries.get(mood, 'top songs')
+        await q.edit_message_text(f"🎭 *Loading {mood.title()} vibes\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+        songs = api.search(query)
         if songs:
             db.user_searches[uid] = {'q': f'{mood.title()} Mood', 'songs': songs}
-            await q.edit_message_text(f"🎭 *{esc(mood.title())}*\n📊 {len(songs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
+            await q.edit_message_text(f"🎭 *{esc(mood.title())} Vibes*\n📊 {len(songs)} songs", 
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
         else:
             await q.edit_message_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Artist searches
     elif d.startswith("art_"):
         artist = d[4:]
-        names = {'arijit': 'Arijit Singh', 'shreya': 'Shreya Ghoshal', 'atif': 'Atif Aslam', 'neha': 'Neha Kakkar', 'apdhillon': 'AP Dhillon', 'jubin': 'Jubin Nautiyal', 'kk': 'KK', 'sonu': 'Sonu Nigam'}
-        name = names.get(artist, artist)
-        await q.edit_message_text(f"🎤 *Loading\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+        artist_names = {
+            'arijit': 'Arijit Singh', 
+            'shreya': 'Shreya Ghoshal', 
+            'atif': 'Atif Aslam',
+            'neha': 'Neha Kakkar', 
+            'apdhillon': 'AP Dhillon', 
+            'jubin': 'Jubin Nautiyal',
+            'kk': 'KK', 
+            'sonu': 'Sonu Nigam'
+        }
+        if artist == 'search':
+            await q.edit_message_text("🎤 *Artist Search*\n\nSend artist name:", parse_mode=ParseMode.MARKDOWN_V2)
+            return
+        name = artist_names.get(artist, artist)
+        await q.edit_message_text(f"🎤 *Loading {esc(name)}\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
         songs = api.search(name)
         if songs:
             db.user_searches[uid] = {'q': name, 'songs': songs}
-            await q.edit_message_text(f"🎤 *{esc(name)}*\n📊 {len(songs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
+            await q.edit_message_text(f"🎤 *{esc(name)}*\n📊 {len(songs)} songs", 
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, 0, len(songs)))
         else:
-            await q.edit_message_text("❌ *No songs\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            await q.edit_message_text("❌ *No songs found\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Quality settings
     elif d == "set_quality":
         await q.edit_message_text("📶 *Select Quality*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.quality())
+    
     elif d.startswith("q_"):
         quality = d[2:] + 'kbps'
         db.user_settings[uid]['quality'] = quality
-        await q.answer(f"✅ {quality}", show_alert=True)
+        await q.answer(f"✅ Quality set to {quality}", show_alert=True)
         await q.edit_message_text("⚙️ *Settings*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.settings(uid))
     
+    # Song select
     elif d.startswith("s_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -626,13 +800,16 @@ async def on_callback(u: Update, c):
         if idx >= len(songs): return
         song = songs[idx]
         pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
+        
         purl = song.get('perma_url', '')
         if purl:
             det = api.song(purl)
             if det: song.update(det); db.user_searches[uid]['songs'][idx] = song
+        
         db.add_to_history(uid, song)
         await send_song_detail(q.message, c, uid, song, idx, pg)
     
+    # Collection song
     elif d.startswith("c_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
@@ -642,46 +819,73 @@ async def on_callback(u: Update, c):
         db.add_to_history(uid, song)
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
+    # Collection pagination
     elif d.startswith("cp_"):
         start = int(d[3:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
-        await q.edit_message_reply_markup(reply_markup=kb.collection(songs, start))
+        col_type = db.user_searches[uid].get('type', 'album')
+        await q.edit_message_reply_markup(reply_markup=kb.collection(songs, start, col_type))
     
+    # Pagination
     elif d.startswith("p_"):
         start = int(d[2:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         await q.edit_message_reply_markup(reply_markup=kb.songs(songs, start, len(songs)))
     
+    # Shuffle
     elif d == "shuffle":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs'].copy()
         random.shuffle(songs)
         db.user_searches[uid]['songs'] = songs
         await q.edit_message_reply_markup(reply_markup=kb.songs(songs, 0, len(songs)))
-        await q.answer("🔀 Shuffled!")
+        await q.answer("🔀 Shuffled!", show_alert=False)
     
+    # Back
     elif d.startswith("b_"):
         pg = int(d[2:])
-        if uid not in db.user_searches: return
+        if uid not in db.user_searches:
+            await q.message.reply_text("⚠️ Session expired\\!", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+            return
         songs = db.user_searches[uid]['songs']
         qry = db.user_searches[uid].get('q', 'Results')
         try: await q.message.delete()
         except: pass
-        await c.bot.send_message(q.message.chat.id, f"🎵 *{esc(str(qry)[:30])}*\n📊 {len(songs)} songs", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, pg, len(songs)))
+        await c.bot.send_message(q.message.chat.id, f"🎵 *{esc(str(qry)[:30])}*\n📊 {len(songs)} songs",
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.songs(songs, pg, len(songs)))
     
+    # Download
     elif d.startswith("d_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
         song = songs[idx]
-        await q.answer("⬇️ Downloading...")
-        msg = await q.message.reply_text("⏳ *Downloading\\.\\.\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+        
+        await q.answer("⬇️ Starting download...")
+        
+        loading_text = """
+╔══════════════════════════╗
+    ⏳ *Downloading*
+╚══════════════════════════╝
+
+🎵 Fetching your music\\.\\.\\.
+
+⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷
+█░░░░░░░░░░░░░░░░░░░░░░█
+█░░▓▓▓▓▓▓▓░░░░░░░░░░░░░█  
+█░░░░░░░░░░░░░░░░░░░░░░█
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+
+_Please wait\\.\\.\\._
+"""
+        msg = await q.message.reply_text(loading_text, parse_mode=ParseMode.MARKDOWN_V2)
         
         try:
             await c.bot.send_chat_action(q.message.chat.id, "upload_audio")
+            
             dl_url = song.get('media_url') or song.get('url', '')
             if not dl_url:
                 purl = song.get('perma_url', '')
@@ -690,44 +894,99 @@ async def on_callback(u: Update, c):
                     if det: 
                         dl_url = det.get('media_url') or det.get('url', '')
                         song.update(det)
+            
             if not dl_url:
-                await msg.edit_text("❌ *URL not found\\!*", parse_mode=ParseMode.MARKDOWN_V2)
+                await msg.edit_text("❌ *Download URL not found\\!*", parse_mode=ParseMode.MARKDOWN_V2)
                 return
+            
             quality = db.user_settings[uid].get('quality', '160kbps')
             dl_url = get_quality_url(song, quality) or dl_url
+            
+            await msg.edit_text("""
+╔══════════════════════════╗
+    ⏳ *Downloading*
+╚══════════════════════════╝
+
+🎵 Fetching your music\\.\\.\\.
+
+⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷
+█░░░░░░░░░░░░░░░░░░░░░░█
+█░░▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░█  
+█░░░░░░░░░░░░░░░░░░░░░░█
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+
+_Almost there\\.\\.\\._
+""", parse_mode=ParseMode.MARKDOWN_V2)
+            
             data = api.download(dl_url)
             if not data:
-                await msg.edit_text("❌ *Failed\\!*", parse_mode=ParseMode.MARKDOWN_V2)
+                await msg.edit_text("❌ *Download failed\\!* Try again", parse_mode=ParseMode.MARKDOWN_V2)
                 return
+            
             title = song.get('title') or song.get('song', 'Unknown')
             singers = song.get('singers', 'Unknown')
             dur = int(song.get('duration', 0))
             img = song.get('image') or song.get('image_url', '')
+            
             thumb = None
             if img:
                 try:
                     tr = SESSION.get(img, timeout=15)
                     if tr.status_code == 200: thumb = BytesIO(tr.content)
                 except: pass
+            
             audio = BytesIO(data)
             safe_title = re.sub(r'[<>:"/\\|?*]', '', title)[:50]
             audio.name = f"{safe_title}.mp3"
-            caption = f"🎵 *{esc(title)}*\n👤 {esc(singers)}"
-            await c.bot.send_audio(chat_id=q.message.chat.id, audio=audio, thumbnail=thumb, title=title, performer=singers, duration=dur, filename=f"{safe_title}.mp3", caption=caption, parse_mode=ParseMode.MARKDOWN_V2)
+            
+            await msg.edit_text("""
+╔══════════════════════════╗
+    📤 *Uploading*
+╚══════════════════════════╝
+
+🎵 Sending to you\\.\\.\\.
+
+⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷
+█░░░░░░░░░░░░░░░░░░░░░░█
+█░░▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░█  
+█░░░░░░░░░░░░░░░░░░░░░░█
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+
+_Uploading\\.\\.\\._
+""", parse_mode=ParseMode.MARKDOWN_V2)
+            
+            caption = f"🎵 *{esc(title)}*\n👤 {esc(singers)}\n\n_Downloaded via @Grooviabot_"
+            
+            await c.bot.send_audio(
+                chat_id=q.message.chat.id, 
+                audio=audio, 
+                thumbnail=thumb,
+                title=title, 
+                performer=singers, 
+                duration=dur, 
+                filename=f"{safe_title}.mp3",
+                caption=caption, 
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            
             db.user_stats[uid]['downloads'] += 1
             db.global_downloads += 1
             await msg.delete()
+            
         except Exception as e:
             logger.error(f"Download error: {e}")
-            try: await msg.edit_text("❌ *Error\\!*", parse_mode=ParseMode.MARKDOWN_V2)
-            except: pass
+            await msg.edit_text("❌ *Error occurred\\!*\n\nPlease try again", parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Download all
     elif d == "dall":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
-        max_dl = min(len(songs), 10)
-        await q.answer(f"⬇️ Downloading {max_dl}...")
-        msg = await q.message.reply_text(f"📥 *Batch*\n\n⏳ 0/{max_dl}", parse_mode=ParseMode.MARKDOWN_V2)
+        max_dl = len(songs)
+
+        await q.answer(f"⬇️ Downloading {max_dl} songs...")
+        
+        msg = await q.message.reply_text(f"📥 *Batch Download*\n\n⏳ Downloading 0/{max_dl}\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        
         done = 0
         for i, song in enumerate(songs[:max_dl]):
             try:
@@ -737,80 +996,98 @@ async def on_callback(u: Update, c):
                     if purl:
                         det = api.song(purl)
                         if det: dl_url = det.get('media_url') or det.get('url', '')
+                
                 if dl_url:
                     quality = db.user_settings[uid].get('quality', '160kbps')
                     dl_url = get_quality_url(song, quality) or dl_url
                     data = api.download(dl_url)
+                    
                     if data:
                         title = song.get('title') or song.get('song', 'Song')
                         safe_title = re.sub(r'[<>:"/\\|?*]', '', title)[:50]
                         audio = BytesIO(data)
                         audio.name = f"{safe_title}.mp3"
+                        
                         await c.bot.send_audio(chat_id=q.message.chat.id, audio=audio, title=title, filename=f"{safe_title}.mp3")
                         done += 1
                         db.user_stats[uid]['downloads'] += 1
                         db.global_downloads += 1
-                        await msg.edit_text(f"📥 *Batch*\n\n⏳ {done}/{max_dl}", parse_mode=ParseMode.MARKDOWN_V2)
+                        
+                        await msg.edit_text(f"📥 *Batch Download*\n\n⏳ Downloaded {done}/{max_dl}\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
+                
                 await asyncio.sleep(1.5)
             except Exception as e:
-                logger.error(f"Batch error: {e}")
-        await msg.edit_text(f"✅ *Complete\\!*\n\n📊 {done}/{max_dl}", parse_mode=ParseMode.MARKDOWN_V2)
+                logger.error(f"Batch download error: {e}")
+        
+        await msg.edit_text(f"✅ *Download Complete\\!*\n\n📊 {done}/{max_dl} songs downloaded", parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Save all to favorites
     elif d == "savall":
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         added = 0
         for song in songs:
-            if db.add_to_favorites(uid, song): added += 1
+            if db.add_to_favorites(uid, song): 
+                added += 1
         if added > 0:
-            await q.answer(f"💖 Added {added}!", show_alert=True)
+            await q.answer(f"💖 Added {added} songs to favorites!", show_alert=True)
         else:
-            await q.answer("Already in favorites!", show_alert=True)
+            await q.answer("All songs already in favorites!", show_alert=True)
     
+    # Lyrics
     elif d.startswith("l_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
         song = songs[idx]
+        
         purl = song.get('perma_url', '')
         if not purl:
-            await q.message.reply_text("❌ *Not available\\!*", parse_mode=ParseMode.MARKDOWN_V2)
+            await q.message.reply_text("❌ *Lyrics not available\\!*", parse_mode=ParseMode.MARKDOWN_V2)
             return
-        await q.answer("📝 Fetching...")
+        
+        await q.answer("📝 Fetching lyrics...")
         det = api.song(purl, lyrics=True)
         lyrics = det.get('lyrics', '') if det else ''
+        
         if not lyrics:
-            await q.message.reply_text("😕 *No lyrics\\!*", parse_mode=ParseMode.MARKDOWN_V2)
+            await q.message.reply_text("😕 *No lyrics found\\!*", parse_mode=ParseMode.MARKDOWN_V2)
             return
+        
         title = det.get('title') or det.get('song', '')
-        txt = f"📝 *{esc(title)}*\n\n{esc(lyrics)}"
+        txt = f"📝 *{esc(title)}*\n\n━━━━━━━━━━━━━━━━━━━━━\n\n{esc(lyrics)}"
         if len(txt) > 4000: txt = txt[:4000] + "\\.\\.\\."
         await q.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Share
     elif d.startswith("sh_"):
         idx = int(d[3:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
         song = songs[idx]
+        
         purl = song.get('perma_url', '')
         title = song.get('title') or song.get('song', 'Song')
         singers = song.get('singers', '')
-        await q.message.reply_text(f"🎵 *{title}*\nby {singers}\n\n{purl}", parse_mode=ParseMode.MARKDOWN_V2)
+        
+        share_text = f"🎵 Check out this song!\n\n*{title}*\nby {singers}\n\n{purl}"
+        await q.message.reply_text(share_text, parse_mode=ParseMode.MARKDOWN_V2)
     
+    # Fav/Unfav
     elif d.startswith("f_"):
         idx = int(d[2:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
         if db.add_to_favorites(uid, songs[idx]):
-            await q.answer("💖 Added!", show_alert=True)
+            await q.answer("💖 Added to favorites!", show_alert=True)
             pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
             try: await q.edit_message_reply_markup(reply_markup=kb.detail(idx, True, pg))
             except: pass
         else:
-            await q.answer("Already in favorites!")
+            await q.answer("Already in favorites!", show_alert=True)
     
     elif d.startswith("uf_"):
         idx = int(d[3:])
@@ -819,11 +1096,12 @@ async def on_callback(u: Update, c):
         if idx >= len(songs): return
         sid = songs[idx].get('songid') or songs[idx].get('id', '')
         if db.remove_from_favorites(uid, sid):
-            await q.answer("💔 Removed!", show_alert=True)
+            await q.answer("💔 Removed from favorites!", show_alert=True)
             pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
             try: await q.edit_message_reply_markup(reply_markup=kb.detail(idx, False, pg))
             except: pass
     
+    # Fav play
     elif d.startswith("fp_"):
         idx = int(d[3:])
         favs = db.user_favorites[uid]
@@ -832,6 +1110,7 @@ async def on_callback(u: Update, c):
         db.user_searches[uid] = {'q': 'Favorites', 'songs': favs}
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
+    # History play
     elif d.startswith("hp_"):
         idx = int(d[3:])
         hist = db.user_history[uid]
@@ -840,93 +1119,136 @@ async def on_callback(u: Update, c):
         db.user_searches[uid] = {'q': 'History', 'songs': hist}
         await send_song_detail(q.message, c, uid, song, idx, 0)
     
+    # Clear favorites
     elif d == "cfav":
         db.user_favorites[uid] = []
-        await q.answer("🗑️ Cleared!", show_alert=True)
-        await q.edit_message_text("💔 *Cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await q.answer("🗑️ Favorites cleared!", show_alert=True)
+        await q.edit_message_text("💔 *Favorites cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Clear history
     elif d == "chist":
         db.user_history[uid] = []
-        await q.answer("🗑️ Cleared!", show_alert=True)
-        await q.edit_message_text("📜 *Cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
+        await q.answer("🗑️ History cleared!", show_alert=True)
+        await q.edit_message_text("📜 *History cleared\\!*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.main())
     
+    # Create new playlist
     elif d == "newpl":
-        await q.edit_message_text("📁 *Create Playlist*\n\nSend name:", parse_mode=ParseMode.MARKDOWN_V2)
+        await q.edit_message_text("📁 *Create Playlist*\n\nSend playlist name:", parse_mode=ParseMode.MARKDOWN_V2)
         db.user_stats[uid]['awaiting_playlist'] = True
     
+    # Add to playlist
     elif d.startswith("addpl_"):
         idx = int(d[6:])
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
+        
         pls = db.user_playlists[uid]
         if not pls:
-            await q.answer("📁 Create playlist first!", show_alert=True)
+            await q.answer("📁 Create a playlist first!", show_alert=True)
             return
+        
         kb_pl = []
         for name in list(pls.keys())[:8]:
             kb_pl.append([InlineKeyboardButton(f"📁 {name}", callback_data=f"plsel_{idx}_{name}")])
         kb_pl.append([InlineKeyboardButton("🔙 Back", callback_data=f"s_{idx}")])
-        await q.edit_message_text("📁 *Select*", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(kb_pl))
+        
+        await q.edit_message_text("📁 *Select Playlist*\n\nChoose where to add:", 
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(kb_pl))
     
+    # Playlist selection
     elif d.startswith("plsel_"):
         parts = d[6:].split('_', 1)
         idx = int(parts[0])
         pl_name = parts[1] if len(parts) > 1 else ""
+        
         if uid not in db.user_searches: return
         songs = db.user_searches[uid]['songs']
         if idx >= len(songs): return
+        
         if db.add_to_playlist(uid, pl_name, songs[idx]):
-            await q.answer(f"✅ Added!", show_alert=True)
+            await q.answer(f"✅ Added to {pl_name}!", show_alert=True)
         else:
-            await q.answer("Already in playlist!")
+            await q.answer("Already in playlist!", show_alert=True)
+        
         pg = (idx // SONGS_PER_PAGE) * SONGS_PER_PAGE
         sid = songs[idx].get('songid') or songs[idx].get('id', '')
         fav = any((s.get('songid') or s.get('id', '')) == sid for s in db.user_favorites[uid])
         await q.edit_message_reply_markup(reply_markup=kb.detail(idx, fav, pg))
     
+    # View playlist
     elif d.startswith("pl_"):
         pl_name = d[3:]
         if pl_name not in db.user_playlists[uid]:
-            await q.answer("Not found!", show_alert=True)
+            await q.answer("Playlist not found!", show_alert=True)
             return
+        
         songs = db.user_playlists[uid][pl_name]
         if not songs:
-            await q.edit_message_text(f"📁 *{esc(pl_name)}*\n\nEmpty", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
+            await q.edit_message_text(f"📁 *{esc(pl_name)}*\n\n📋 Empty playlist", 
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.playlists(uid))
             return
-        db.user_searches[uid] = {'q': f'Playlist: {pl_name}', 'songs': songs}
-        await q.edit_message_text(f"📁 *{esc(pl_name)}*\n📊 {len(songs)}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(songs))
+        
+        db.user_searches[uid] = {'q': f'Playlist: {pl_name}', 'songs': songs, 'type': 'playlist'}
+        await q.edit_message_text(f"📁 *{esc(pl_name)}*\n📊 {len(songs)} songs",
+            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb.collection(songs, 0, 'playlist'))
+
+                
+    logger.error(f"Error: {c.error}")
 
 async def on_error(u: Update, c):
     logger.error(f"Error: {c.error}")
 
 async def post_init(app):
     await app.bot.set_my_commands([
-        BotCommand("start", "🚀 Start"), BotCommand("menu", "🎵 Menu"),
-        BotCommand("favorites", "💖 Favorites"), BotCommand("history", "📜 History"),
-        BotCommand("stats", "📊 Stats"), BotCommand("settings", "⚙️ Settings"),
-        BotCommand("help", "❓ Help"),
+        BotCommand("start", "🚀 Start the bot"),
+        BotCommand("menu", "🎵 Main menu"),
+        BotCommand("favorites", "💖 Your favorites"),
+        BotCommand("history", "📜 Listening history"),
+        BotCommand("stats", "📊 Your statistics"),
+        BotCommand("settings", "⚙️ Bot settings"),
+        BotCommand("help", "❓ Help guide"),
     ])
-    logger.info("✅ Commands set - NO WEBHOOK")
+    
+    # Set webhook logic (skipped for polling, but kept for structure)
+    if os.environ.get('RENDER_EXTERNAL_URL'):
+        webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', '')}/{BOT_TOKEN}"
+        try:
+            await app.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+            logger.info(f"✅ Webhook set successfully: {webhook_url}")
+        except Exception as e:
+            logger.error(f"❌ Failed to set webhook: {e}")
+    else:
+        logger.info("ℹ️ Skipping webhook setup (Polling mode)")
+        # We already deleted webhook in main(), but safe to do again
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=True)
+        except:
+            pass
 
 def main():
-    logger.info("=" * 50)
-    logger.info("🔴 CRITICAL: Deleting webhook PERMANENTLY...")
-    logger.info("=" * 50)
-    
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("❌ BOT_TOKEN missing!")
+        return
+
+    # Force delete webhook to prevent 409 Conflict errors
     try:
-        resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", json={"drop_pending_updates": True}, timeout=10)
-        logger.info(f"✅ Webhook delete response: {resp.json()}")
-        time.sleep(3)
+        logger.info("🔄 Force deleting webhook to ensure polling works...")
+        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True")
+        logger.info("✅ Webhook deleted successfully")
     except Exception as e:
-        logger.error(f"⚠️ Webhook delete error: {e}")
+        logger.error(f"⚠️ Failed to delete webhook: {e}")
+
+    # Get port and webhook URL
+    PORT = int(os.environ.get("PORT", 8000))
+    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
     
-    PORT = int(os.environ.get("PORT", 8080))
-    logger.info(f"🚀 Starting POLLING ONLY mode on port {PORT}")
-    logger.info("=" * 50)
-    
+    logger.info(f"🚀 Starting bot on port {PORT}")
+
+    # Build application
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-    
+
+    # Add handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("menu", cmd_menu))
@@ -937,16 +1259,21 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
-    
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
+
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
     flask_thread.start()
-    logger.info("✅ Flask keep-alive started")
-    logger.info(f"📡 Health URL: http://0.0.0.0:{PORT}/")
-    logger.info("💡 Add to UptimeRobot to keep alive")
-    logger.info("🎵 Bot running in PURE POLLING mode")
-    logger.info("=" * 50)
-    
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, poll_interval=1.0, timeout=30)
+    logger.info("✅ Flask keep-alive server started")
+
+    if RENDER_URL:
+        logger.info(f"🔗 Render URL detected: {RENDER_URL}")
+        logger.info("ℹ️ Running in POLLING mode with Flask keep-alive (Recommended for Render Free Tier)")
+    else:
+        logger.info("ℹ️ Running in Local POLLING mode")
+
+    # Run bot in polling mode
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
