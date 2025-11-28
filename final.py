@@ -129,6 +129,7 @@ def url_type(u):
     if '/song/' in u: return 'song'
     if '/album/' in u: return 'album'
     if '/playlist/' in u: return 'playlist'
+    if '/featured/' in u: return 'playlist'    
     if '/artist/' in u: return 'artist'
     return None
 
