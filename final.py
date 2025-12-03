@@ -66,52 +66,94 @@ class LyricsDetector:
     
     @staticmethod
     def search_song_by_lyrics(lyrics_query):
-        """Search song using lyrics via Google"""
+        """Search song using lyrics via Google - Multiple methods"""
         try:
-            # Clean and prepare query
-            clean_query = lyrics_query.strip()[:100]  # Limit to 100 chars
-            query = urllib.parse.quote(f"{clean_query} song lyrics")
-            url = f"https://www.google.com/search?q={query}"
+            clean_query = lyrics_query.strip()[:100]
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            }
+            # Method 1: Try direct Google scraping
+            song_name = LyricsDetector._google_search(clean_query)
+            if song_name:
+                logger.info(f"✅ Detected via Google: {song_name}")
+                return song_name
             
-            response = SESSION.get(url, headers=headers, timeout=10)
-            if response.status_code != 200:
-                return None
+            # Method 2: Try with "song name" addition
+            song_name = LyricsDetector._google_search(f"{clean_query} song name")
+            if song_name:
+                logger.info(f"✅ Detected via Google (song name): {song_name}")
+                return song_name
             
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Try multiple extraction methods
-            # Method 1: Featured snippet
-            featured = soup.find('div', {'class': 'BNeawe'})
-            if featured:
-                text = featured.get_text()
-                song_name = LyricsDetector._extract_song_name(text)
+            # Method 3: Extract key phrases and search
+            keywords = LyricsDetector._extract_keywords(clean_query)
+            if keywords:
+                song_name = LyricsDetector._google_search(f"{keywords} song")
                 if song_name:
+                    logger.info(f"✅ Detected via keywords: {song_name}")
                     return song_name
             
-            # Method 2: Search results titles
-            results = soup.find_all('h3', limit=3)
-            for result in results:
-                text = result.get_text()
-                song_name = LyricsDetector._extract_song_name(text)
-                if song_name:
-                    return song_name
-            
-            # Method 3: Any text with "lyrics" keyword
-            all_text = soup.get_text()
-            lines = [l.strip() for l in all_text.split('\n') if 'lyrics' in l.lower() and len(l) < 100]
-            if lines:
-                song_name = LyricsDetector._extract_song_name(lines[0])
-                if song_name:
-                    return song_name
-            
+            logger.warning(f"❌ Could not detect song from lyrics: {clean_query}")
             return None
             
         except Exception as e:
             logger.error(f"Lyrics detection error: {e}")
+            return None
+    
+    @staticmethod
+    def _google_search(query):
+        """Perform Google search and extract song name"""
+        try:
+            encoded_query = urllib.parse.quote(f"{query} lyrics")
+            url = f"https://www.google.com/search?q={encoded_query}"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
+            
+            response = SESSION.get(url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                logger.warning(f"Google returned status: {response.status_code}")
+                return None
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Method 1: Try all h3 tags (search result titles)
+            for h3 in soup.find_all('h3', limit=5):
+                text = h3.get_text()
+                song_name = LyricsDetector._extract_song_name(text)
+                if song_name:
+                    return song_name
+            
+            # Method 2: Try divs with specific classes
+            for div in soup.find_all('div', {'class': ['BNeawe', 'vvjwJb']}, limit=5):
+                text = div.get_text()
+                song_name = LyricsDetector._extract_song_name(text)
+                if song_name:
+                    return song_name
+            
+            # Method 3: Try spans
+            for span in soup.find_all('span', limit=10):
+                text = span.get_text()
+                if 'lyrics' in text.lower() and len(text) < 100:
+                    song_name = LyricsDetector._extract_song_name(text)
+                    if song_name:
+                        return song_name
+            
+            # Method 4: Extract from page text
+            all_text = soup.get_text()
+            lines = [l.strip() for l in all_text.split('\n') if 5 < len(l) < 100]
+            for line in lines[:20]:
+                if any(keyword in line.lower() for keyword in ['lyrics', 'song', 'by']):
+                    song_name = LyricsDetector._extract_song_name(line)
+                    if song_name:
+                        return song_name
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Google search error: {e}")
             return None
     
     @staticmethod
@@ -120,47 +162,86 @@ class LyricsDetector:
         if not text:
             return None
         
-        # Remove common suffixes
-        text = re.sub(r'\s*[-–—]\s*(lyrics|official|video|song|audio|full|hd).*$', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\s*\((lyrics|official|video|audio)\).*$', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\s*lyrics.*$', '', text, flags=re.IGNORECASE)
+        original_text = text
         
-        # Clean up
+        # Remove URLs
+        text = re.sub(r'http\S+|www\.\S+', '', text)
+        
+        # Remove common suffixes and noise
+        text = re.sub(r'\s*[-–—|]\s*(lyrics|official|video|song|audio|full|hd|ft\.|feat\.|featuring).*$', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s*\((lyrics|official|video|audio|full|hd)\).*$', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s+lyrics\s*$', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'^lyrics\s+', '', text, flags=re.IGNORECASE)
+        
+        # Remove "by artist" if exists
+        text = re.sub(r'\s+by\s+\w+.*$', '', text, flags=re.IGNORECASE)
+        
+        # Remove extra whitespace
+        text = ' '.join(text.split())
         text = text.strip()
         
         # Must be reasonable length
         if 3 < len(text) < 80:
-            return text
+            # Avoid common noise words
+            noise_words = ['google', 'search', 'youtube', 'spotify', 'apple music', 'amazon', 'click here', 
+                          'subscribe', 'download', 'watch', 'listen', 'play', 'genius', 'azlyrics']
+            
+            if not any(noise.lower() in text.lower() for noise in noise_words):
+                logger.info(f"Extracted: '{text}' from '{original_text}'")
+                return text
         
         return None
+    
+    @staticmethod
+    def _extract_keywords(text):
+        """Extract key phrases from lyrics"""
+        # Get first 5-6 meaningful words
+        words = text.split()
+        keywords = ' '.join(words[:6])
+        return keywords
     
     @staticmethod
     def is_lyrics_query(text):
         """Check if query looks like lyrics"""
         # Check if it's not a URL
-        if 'http' in text.lower() or '.com' in text.lower():
+        if 'http' in text.lower() or '.com' in text.lower() or 'jiosaavn' in text.lower():
             return False
         
         # Check if it has multiple words (lyrics usually do)
         words = text.split()
-        if len(words) < 3:
+        if len(words) < 4:  # Increased to 4 words minimum
             return False
         
         # Check if it looks like a song name (short queries)
-        if len(text) < 15:
+        if len(text) < 20:  # Increased minimum length
             return False
         
-        # Lyrics patterns
-        lyrics_patterns = [
-            r'\b(kal|aaj|raat|din|dil|pyar|mohabbat|ishq|tere|meri|tumhe|mere)\b',
-            r'\b(love|heart|night|day|feel|life|baby|know|want|need)\b',
-            r'[.!?]',  # Has punctuation
-            r'\b(mil|gaya|tha|hai|ho|na|tu|main)\b'  # Common Hindi words
+        # Check for common song name patterns (likely NOT lyrics)
+        song_name_patterns = [
+            r'^\w+\s+\w+$',  # Just 2 words
+            r'^[\w\s]{1,25}$'  # Very short
         ]
         
+        for pattern in song_name_patterns:
+            if re.match(pattern, text):
+                return False
+        
+        # Lyrics patterns - more strict
+        lyrics_patterns = [
+            r'\b(kal|aaj|raat|din|dil|pyar|mohabbat|ishq|tere|meri|tumhe|mere|mein|tha|hai|ho)\b',
+            r'\b(love|heart|night|day|feel|life|baby|know|want|need|never|always|when|where)\b',
+            r'\b(mil|gaya|tha|hai|ho|na|tu|main|kar|de|le|ja)\b'
+        ]
+        
+        match_count = 0
         for pattern in lyrics_patterns:
             if re.search(pattern, text, re.IGNORECASE):
-                return True
+                match_count += 1
+        
+        # Need at least 2 pattern matches for lyrics
+        if match_count >= 2:
+            logger.info(f"Detected as lyrics query: {text}")
+            return True
         
         return False
 
@@ -680,7 +761,7 @@ async def handle_lyrics_search(u, c, lyrics, uid):
     
     # Animate loader while detecting
     async def animate_loader():
-        for i in range(20):  # Run for ~2 seconds
+        for i in range(30):  # Run for ~3 seconds
             try:
                 await msg.edit_text(esc(loader_frames[i % len(loader_frames)]), parse_mode=ParseMode.MARKDOWN_V2)
                 await asyncio.sleep(0.1)
@@ -697,14 +778,16 @@ async def handle_lyrics_search(u, c, lyrics, uid):
     animation_task.cancel()
     
     if not song_name:
-        # Fallback to regular search
-        await msg.edit_text("🔍 *Lyrics not detected\\!*\n\nSearching as regular query\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        # Try searching with first few words as fallback
+        fallback_query = ' '.join(lyrics.split()[:6])
+        logger.info(f"Fallback: Searching with '{fallback_query}'")
+        await msg.edit_text(f"🔍 *Searching with:*\n`{esc(fallback_query)}`\n\n_Finding best matches\\.\\.\\._", parse_mode=ParseMode.MARKDOWN_V2)
         await asyncio.sleep(0.5)
-        await handle_search_internal(msg, c, lyrics, uid, is_lyrics=False)
+        await handle_search_internal(msg, c, fallback_query, uid, is_lyrics=True)
         return
     
     # Show detected song
-    await msg.edit_text(f"✅ *Detected Song\\!*\n\n🎵 `{esc(song_name)}`\n\n🔍 Searching\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
+    await msg.edit_text(f"✅ *Song Detected\\!*\n\n🎵 `{esc(song_name)}`\n\n🔍 Searching JioSaavn\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
     await asyncio.sleep(0.5)
     
     # Search for the detected song
