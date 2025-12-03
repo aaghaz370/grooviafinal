@@ -62,35 +62,34 @@ SESSION = create_session()
 
 # ==================== NEW: LYRICS SEARCH ====================
 class LyricsDetector:
-    """Detect song name from lyrics using Google Search"""
+    """Detect song name from lyrics using multiple free sources"""
     
     @staticmethod
     def search_song_by_lyrics(lyrics_query):
-        """Search song using lyrics via Google - Multiple methods"""
+        """Search song using lyrics - Multiple FREE methods"""
         try:
             clean_query = lyrics_query.strip()[:100]
+            logger.info(f"🔍 Searching for lyrics: {clean_query}")
             
-            # Method 1: Try direct Google scraping
+            # Method 1: Genius scraping (Most reliable)
+            song_name = LyricsDetector._genius_search(clean_query)
+            if song_name:
+                logger.info(f"✅ Detected via Genius: {song_name}")
+                return song_name
+            
+            # Method 2: AZLyrics search
+            song_name = LyricsDetector._azlyrics_search(clean_query)
+            if song_name:
+                logger.info(f"✅ Detected via AZLyrics: {song_name}")
+                return song_name
+            
+            # Method 3: Google as last resort
             song_name = LyricsDetector._google_search(clean_query)
             if song_name:
                 logger.info(f"✅ Detected via Google: {song_name}")
                 return song_name
             
-            # Method 2: Try with "song name" addition
-            song_name = LyricsDetector._google_search(f"{clean_query} song name")
-            if song_name:
-                logger.info(f"✅ Detected via Google (song name): {song_name}")
-                return song_name
-            
-            # Method 3: Extract key phrases and search
-            keywords = LyricsDetector._extract_keywords(clean_query)
-            if keywords:
-                song_name = LyricsDetector._google_search(f"{keywords} song")
-                if song_name:
-                    logger.info(f"✅ Detected via keywords: {song_name}")
-                    return song_name
-            
-            logger.warning(f"❌ Could not detect song from lyrics: {clean_query}")
+            logger.warning(f"❌ Could not detect song from lyrics")
             return None
             
         except Exception as e:
@@ -98,57 +97,125 @@ class LyricsDetector:
             return None
     
     @staticmethod
-    def _google_search(query):
-        """Perform Google search and extract song name"""
+    def _genius_search(query):
+        """Search via Genius.com - Very reliable"""
         try:
-            encoded_query = urllib.parse.quote(f"{query} lyrics")
-            url = f"https://www.google.com/search?q={encoded_query}"
+            # Genius search URL
+            search_query = urllib.parse.quote(query)
+            url = f"https://genius.com/api/search/multi?q={search_query}"
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
             }
             
-            response = SESSION.get(url, headers=headers, timeout=15)
+            response = SESSION.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Try to get song from response
+                if 'response' in data and 'sections' in data['response']:
+                    for section in data['response']['sections']:
+                        if section.get('type') == 'song' and 'hits' in section:
+                            for hit in section['hits'][:3]:
+                                if 'result' in hit:
+                                    result = hit['result']
+                                    title = result.get('title', '')
+                                    artist = result.get('primary_artist', {}).get('name', '')
+                                    
+                                    if title:
+                                        # Clean and return
+                                        song_name = f"{title}"
+                                        if artist and artist not in title:
+                                            song_name = f"{title} {artist}"
+                                        return LyricsDetector._clean_song_name(song_name)
+            
+            # Fallback: Try HTML scraping
+            url = f"https://genius.com/search?q={search_query}"
+            response = SESSION.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Find song titles
+                for item in soup.find_all(['a', 'div'], limit=5):
+                    text = item.get_text().strip()
+                    if 'Lyrics' in text or 'lyrics' in text:
+                        song_name = LyricsDetector._extract_song_name(text)
+                        if song_name:
+                            return song_name
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Genius search error: {e}")
+            return None
+    
+    @staticmethod
+    def _azlyrics_search(query):
+        """Search via AZLyrics - Reliable for English songs"""
+        try:
+            search_query = urllib.parse.quote(query)
+            url = f"https://search.azlyrics.com/search.php?q={search_query}"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = SESSION.get(url, headers=headers, timeout=10)
             if response.status_code != 200:
-                logger.warning(f"Google returned status: {response.status_code}")
                 return None
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Method 1: Try all h3 tags (search result titles)
+            # Find first result
+            for td in soup.find_all('td', limit=3):
+                # Look for song links
+                links = td.find_all('a')
+                for link in links:
+                    text = link.get_text().strip()
+                    # Usually format is "Artist - Song Title"
+                    if '-' in text or 'Lyrics' in text:
+                        song_name = LyricsDetector._extract_song_name(text)
+                        if song_name:
+                            return song_name
+                
+                # Also check td text directly
+                text = td.get_text().strip()
+                if 5 < len(text) < 100:
+                    song_name = LyricsDetector._extract_song_name(text)
+                    if song_name:
+                        return song_name
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"AZLyrics search error: {e}")
+            return None
+    
+    @staticmethod
+    def _google_search(query):
+        """Google search as fallback"""
+        try:
+            encoded_query = urllib.parse.quote(f"{query} song name")
+            url = f"https://www.google.com/search?q={encoded_query}"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = SESSION.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                return None
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Try h3 tags
             for h3 in soup.find_all('h3', limit=5):
                 text = h3.get_text()
                 song_name = LyricsDetector._extract_song_name(text)
                 if song_name:
                     return song_name
-            
-            # Method 2: Try divs with specific classes
-            for div in soup.find_all('div', {'class': ['BNeawe', 'vvjwJb']}, limit=5):
-                text = div.get_text()
-                song_name = LyricsDetector._extract_song_name(text)
-                if song_name:
-                    return song_name
-            
-            # Method 3: Try spans
-            for span in soup.find_all('span', limit=10):
-                text = span.get_text()
-                if 'lyrics' in text.lower() and len(text) < 100:
-                    song_name = LyricsDetector._extract_song_name(text)
-                    if song_name:
-                        return song_name
-            
-            # Method 4: Extract from page text
-            all_text = soup.get_text()
-            lines = [l.strip() for l in all_text.split('\n') if 5 < len(l) < 100]
-            for line in lines[:20]:
-                if any(keyword in line.lower() for keyword in ['lyrics', 'song', 'by']):
-                    song_name = LyricsDetector._extract_song_name(line)
-                    if song_name:
-                        return song_name
             
             return None
             
@@ -157,92 +224,107 @@ class LyricsDetector:
             return None
     
     @staticmethod
-    def _extract_song_name(text):
-        """Extract clean song name from text"""
+    def _clean_song_name(text):
+        """Clean song name"""
         if not text:
             return None
         
-        original_text = text
+        # Remove common noise
+        text = re.sub(r'\s*[-–—|]\s*(lyrics|official|video|full|hd).*$', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s*\(.*?\)', '', text)  # Remove brackets
+        text = re.sub(r'\s+lyrics\s*$', '', text, flags=re.IGNORECASE)
+        text = ' '.join(text.split())
+        text = text.strip()
+        
+        if 3 < len(text) < 80:
+            return text
+        return None
+    
+    @staticmethod
+    def _extract_song_name(text):
+        """Extract song name from various formats"""
+        if not text:
+            return None
+        
+        original = text
         
         # Remove URLs
         text = re.sub(r'http\S+|www\.\S+', '', text)
         
-        # Remove common suffixes and noise
-        text = re.sub(r'\s*[-–—|]\s*(lyrics|official|video|song|audio|full|hd|ft\.|feat\.|featuring).*$', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\s*\((lyrics|official|video|audio|full|hd)\).*$', '', text, flags=re.IGNORECASE)
+        # Handle "Artist - Song" format
+        if ' - ' in text:
+            parts = text.split(' - ')
+            if len(parts) == 2:
+                # Return "Song Artist" format
+                song = parts[1].strip()
+                artist = parts[0].strip()
+                text = f"{song} {artist}"
+        
+        # Remove noise
+        text = re.sub(r'\s*[-–—|]\s*(lyrics|official|video|song|audio|full|hd|by).*$', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s*\((lyrics|official|video|audio|by).*?\)', '', text, flags=re.IGNORECASE)
         text = re.sub(r'\s+lyrics\s*$', '', text, flags=re.IGNORECASE)
         text = re.sub(r'^lyrics\s+', '', text, flags=re.IGNORECASE)
         
-        # Remove "by artist" if exists
-        text = re.sub(r'\s+by\s+\w+.*$', '', text, flags=re.IGNORECASE)
-        
-        # Remove extra whitespace
+        # Clean whitespace
         text = ' '.join(text.split())
         text = text.strip()
         
-        # Must be reasonable length
+        # Check length
         if 3 < len(text) < 80:
-            # Avoid common noise words
-            noise_words = ['google', 'search', 'youtube', 'spotify', 'apple music', 'amazon', 'click here', 
-                          'subscribe', 'download', 'watch', 'listen', 'play', 'genius', 'azlyrics']
+            # Avoid noise
+            noise = ['google', 'search', 'youtube', 'spotify', 'click', 'subscribe', 
+                    'download', 'watch', 'genius', 'azlyrics', 'advertisement']
             
-            if not any(noise.lower() in text.lower() for noise in noise_words):
-                logger.info(f"Extracted: '{text}' from '{original_text}'")
+            if not any(n.lower() in text.lower() for n in noise):
+                logger.info(f"📝 Extracted: '{text}' from '{original}'")
                 return text
         
         return None
     
     @staticmethod
-    def _extract_keywords(text):
-        """Extract key phrases from lyrics"""
-        # Get first 5-6 meaningful words
-        words = text.split()
-        keywords = ' '.join(words[:6])
-        return keywords
-    
-    @staticmethod
     def is_lyrics_query(text):
         """Check if query looks like lyrics"""
-        # Check if it's not a URL
+        # Not a URL
         if 'http' in text.lower() or '.com' in text.lower() or 'jiosaavn' in text.lower():
             return False
         
-        # Check if it has multiple words (lyrics usually do)
+        # Need multiple words
         words = text.split()
-        if len(words) < 4:  # Increased to 4 words minimum
+        if len(words) < 4:
             return False
         
-        # Check if it looks like a song name (short queries)
-        if len(text) < 20:  # Increased minimum length
+        # Minimum length
+        if len(text) < 20:
             return False
         
-        # Check for common song name patterns (likely NOT lyrics)
-        song_name_patterns = [
-            r'^\w+\s+\w+$',  # Just 2 words
-            r'^[\w\s]{1,25}$'  # Very short
-        ]
+        # Skip if looks like simple song name
+        if len(words) <= 3 and len(text) < 30:
+            return False
         
-        for pattern in song_name_patterns:
-            if re.match(pattern, text):
-                return False
-        
-        # Lyrics patterns - more strict
+        # Check for lyrics patterns
         lyrics_patterns = [
-            r'\b(kal|aaj|raat|din|dil|pyar|mohabbat|ishq|tere|meri|tumhe|mere|mein|tha|hai|ho)\b',
-            r'\b(love|heart|night|day|feel|life|baby|know|want|need|never|always|when|where)\b',
-            r'\b(mil|gaya|tha|hai|ho|na|tu|main|kar|de|le|ja)\b'
+            # Hindi patterns
+            r'\b(kal|aaj|raat|din|dil|pyar|mohabbat|ishq|tere|meri|tumhe|mere|mein|tha|hai|ho|na|tu|main)\b',
+            # English patterns
+            r'\b(love|heart|night|day|feel|life|baby|know|want|need|never|always|when|where|like|time|way)\b',
+            # Common Hindi verbs
+            r'\b(mil|gaya|tha|hai|ho|kar|de|le|ja|aa|suna|dekha|chala|bola)\b',
+            # Sentence structure
+            r'\b(is|was|were|am|are|been|have|has|had)\b'
         ]
         
         match_count = 0
         for pattern in lyrics_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                match_count += 1
+            matches = len(re.findall(pattern, text, re.IGNORECASE))
+            match_count += matches
         
-        # Need at least 2 pattern matches for lyrics
+        # Need at least 2 pattern matches
         if match_count >= 2:
-            logger.info(f"Detected as lyrics query: {text}")
+            logger.info(f"✅ Detected as lyrics: {text[:50]}...")
             return True
         
+        logger.info(f"❌ Not lyrics (only {match_count} matches): {text[:50]}...")
         return False
 
 lyrics_detector = LyricsDetector()
